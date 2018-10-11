@@ -1,15 +1,15 @@
-Office365SharepointConnector
-````````````````````````````
+o365_sharepoint_connector
+`````````````````````````
 
 About
 +++++
 
-Office365SharepointConnector is a Python 3 module to perform HTTPS requests to Microsoft Office365 Sharepoint sanely, with class based ORM mapping.
+o365_sharepoint_connector is a Python 3 module to perform HTTPS requests to Microsoft Office365 Sharepoint sanely, with class based ORM mapping.
 
 Features
 ++++++++
 
-Office365SharepointConnector utilizes Microsoft Sharepoint REST architecture to work with lists, views, folders and files.
+o365_sharepoint_connector utilizes Microsoft Sharepoint REST architecture to work with lists, views, folders and files.
 
 Installation::
 
