@@ -1,9 +1,15 @@
-import json
 import os
+import json
+import logging
+from urllib.parse import urlparse
+from urllib.parse import urlunparse
 
 import requests
-from requests_ntlm import HttpNtlmAuth
+from lxml import etree
 
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 headers = {
     "GET": {
         "Accept": "application/json;odata=verbose"
@@ -30,94 +36,448 @@ headers = {
 }
 
 
-class SharePointConnector:
-    """
-    Class responsible for performing most of common SharePoint Operations.
-    Use also to authenticate access to the SharepointSite and to get a digest value for POST requests.
-    """
+class SharepointException(Exception):
+    pass
 
-    def __init__(self, login, password, base_url, domain="eur"):
-        self.session = requests.Session()
-        self.base_url = base_url + "/"
-        self.session.auth = HttpNtlmAuth("{}\\{}".format(domain, login), "{}".format(password))
-        self.success_list = [200, 201, 202]
 
-    def get_all_lists(self):
+class LoginException(SharepointException):
+    pass
+
+
+class CantCreateNewListException(SharepointException):
+    pass
+
+
+class CantCreateNewFieldException(SharepointException):
+    pass
+
+
+class CantChangeFieldIndexException(SharepointException):
+    pass
+
+
+class ListingException(SharepointException):
+    pass
+
+
+class UpdateException(SharepointException):
+    pass
+
+
+class DeleteException(SharepointException):
+    pass
+
+
+class UploadException(SharepointException):
+    pass
+
+
+class CheckInException(SharepointException):
+    pass
+
+
+class CheckOutException(SharepointException):
+    pass
+
+
+class SharepointFile:
+    def __init__(self):
+        self.raw_data = None
+        self._connector = None
+
+        self.name = ""
+        self.uuid = ""
+        self.exists = True
+        self.content_tag = ""
+        self.linking_url = ""
+        self.time_created = ""
+        self.check_out_type = ""
+        self.check_in_comment = ""
+        self.time_last_modified = ""
+        self.server_relative_url = ""
+        self.folder_relative_url = ""
+
+    @classmethod
+    def from_dict(cls, connector, folder_relative_url, data):
+        sfile = cls()
+        sfile.raw_data = data
+        sfile._connector = connector
+        sfile.folder_relative_url = folder_relative_url
+
+        sfile.name = data["Name"]
+        sfile.uuid = data["UniqueId"]
+        sfile.exists = data["Exists"]
+        sfile.content_tag = data["ContentTag"]
+        sfile.linking_url = data["LinkingUrl"]
+        sfile.time_created = data["TimeCreated"]
+        sfile.check_out_type = data["CheckOutType"]
+        sfile.check_in_comment = data["CheckInComment"]
+        sfile.time_last_modified = data["TimeLastModified"]
+        sfile.server_relative_url = data["ServerRelativeUrl"]
+
+        return sfile
+
+    def __repr__(self):
+        return "SharepointFile(%s)" % self.server_relative_url
+
+    def check_in(self, comment="", check_in_type=0):
         """
-        Gets all lists.
-
-        :return: Returns a REST response.
+        Checks in a file.
         """
-        get = self.session.get(
-            self.base_url + "_api/web/lists?$top=5000",
+        logger.info(
+            "CheckIn file '%s' in library '%s' with comment '%s'.",
+            os.path.basename(self.name),
+            self.server_relative_url,
+            comment
+        )
+
+        headers["POST"]["X-RequestDigest"] = self._connector.digest()
+        post = self._connector.session.post(
+            self._connector.base_url + "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckIn\
+            (comment='{}',checkintype={})".format(
+                self.folder_relative_url,
+                self.name,
+                comment,
+                check_in_type
+            ),
+            headers=headers["POST"]
+        )
+
+        logger.debug("POST: %s", post.status_code)
+        if post.status_code not in self._connector.success_list:
+            raise CheckInException(post.content)
+
+    def check_out(self):
+        """
+        Check outs a file..
+        """
+        logger.info("CheckOut file '%s' in library '%s'.", os.path.basename(self.name), self.folder_relative_url)
+
+        headers["POST"]["X-RequestDigest"] = self._connector.digest()
+        post = self._connector.session.post(
+            self._connector.base_url + "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckOut()".format(
+                self.folder_relative_url,
+                self.name
+            ),
+            headers=headers["POST"]
+        )
+
+        logger.debug("POST: %s", post.status_code)
+        if post.status_code not in self._connector.success_list:
+            CheckOutException(post.content)
+
+    def get_content(self):
+        """
+        Gets file from folder/library as binary
+        """
+        logger.info("Get %s from %s.", self.name, self.server_relative_url)
+        url = self._connector.base_url + "_api/web/GetFolderByServerRelativeUrl('{}')/Files('{}')/$value".format(
+            self.folder_relative_url,
+            self.name
+        )
+        logger.debug("URL: %s", url)
+        get = self._connector.session.get(url, headers=headers["GET"])
+
+        logger.debug("GET: %s", get.status_code)
+        if get.status_code not in self._connector.success_list:
+            raise ListingException(get.content)
+
+        return get.content
+
+    def delete(self, file_name, destination_library):
+        """
+        Deletes a file in given library/folder.
+
+        :param file_name: Required, file name to delete
+        :param destination_library: Required, folder where file exists
+        :return: Returns REST response
+        """
+        logger.info("Delete file '%s' from library '%s'.", os.path.basename(self.name), self.folder_relative_url)
+
+        headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
+        delete = self._connector.session.delete(
+            self._connector.base_url + "_api/web/GetFileByServerRelativeUrl('/{}/{}')".format(
+                self.folder_relative_url,
+                self.name
+            ),
+            headers=headers["DELETE"]
+        )
+
+        logger.debug("POST: %s", delete.status_code)
+        if delete.status_code not in self._connector.success_list:
+            raise DeleteException(delete.content)
+
+
+class SharepointFolder:
+    def __init__(self):
+        self.raw_data = None
+        self._connector = None
+
+        self.name = ""
+        self.exists = True
+        self.unique_id = ""
+        self.item_count = 0
+        self.time_created = ""
+        self.time_last_modified = ""
+        self.server_relative_url = ""
+
+    @classmethod
+    def from_dict(cls, connector, data):
+        sdir = cls()
+        sdir.raw_data = data
+        sdir._connector = connector
+
+        sdir.name = data["Name"]
+        sdir.exists = data["Exists"]
+        sdir.unique_id = data["UniqueId"]
+        sdir.item_count = data["ItemCount"]
+        sdir.time_created = data["TimeCreated"]
+        sdir.time_last_modified = data["TimeLastModified"]
+        sdir.server_relative_url = data["ServerRelativeUrl"]
+
+        return sdir
+
+    def __repr__(self):
+        return "SharepointDir(%s)" % self.name
+
+    def get_files(self):
+        """
+        Gets all files from given library/folder
+        """
+        logger.info("Get all files from %s.", self.server_relative_url)
+
+        get = self._connector.session.get(
+            self._connector.base_url + "_api/web/GetFolderByServerRelativeUrl('/{}')/Files".format(
+                self.server_relative_url
+            ),
             headers=headers["GET"]
         )
-        print("Get all list.")
-        print("GET: {}".format(get.status_code))
-        if get.status_code not in self.success_list:
-            print(get.content)
-        else:
-            return get.json()["d"]["results"]
 
-    def create_new_list(self, data=None, list_name="new_list", description="", allow_content_types=True,
-                        base_template=100, content_types_enabled=True):
+        logger.debug("GET: %s", get.status_code)
+        if get.status_code not in self._connector.success_list:
+            raise ListingException(get.content)
+
+        return {
+            x["Name"]: SharepointFile.from_dict(self._connector, self.server_relative_url, x)
+            for x in get.json()["d"]["results"]
+        }
+
+    def upload_file(self, local_file_path):
         """
-        Use to create new SharePoint List.
-        By default creates new List of any Type with "new_list" name and blank name.
+        Uploads a file.
 
-        Basic Types:
-            100	Custom list
-            101	Document library
-            102	Survey
-            103	Links
-            104	Announcements
-            105	Contacts
-            106	Calendar
-            107	Tasks
-            108	Discussion board
-            109	Picture library
-            110	Data sources for a site
-            111	Site template gallery
-            112	User Information
-            113	Web Part gallery
-
-
-        :param data: Optional Parameter when you need to use your own data
-        :param list_name: Name of new List - Optional, by default set to "new_list".
-        :param description: Description of the list - Optional, by default set to blank.
-        :param base_template: Optional, determines the list type
-        :param allow_content_types: Optional
-        :param content_types_enabled: Optional
-        :return: Returns a REST response.
+        :return: SharepointFile
         """
-        headers["POST"]["X-RequestDigest"] = self.digest()
-        if data is None:
-            data = {
-                '__metadata': {'type': 'SP.List'},
-                'AllowContentTypes': allow_content_types,
-                'BaseTemplate': base_template,
-                'ContentTypesEnabled': content_types_enabled,
-                'Description': '{}'.format(description),
-                'Title': '{}'.format(list_name)
-            }
-        post = self.session.post(
-            self.base_url + "_api/web/lists",
+        logger.info("Upload file '%s' to folder '%s'.", local_file_path, self.server_relative_url)
+
+        headers["POST"]["X-RequestDigest"] = self._connector.digest()
+
+        with open(local_file_path, "rb") as f:
+            file_as_bytes = bytearray(f.read())
+
+        post = self._connector.session.post(
+            self._connector.base_url + "_api/web/GetFolderByServerRelativeUrl('/{}')/Files/add(url='{}',overwrite=true)".format(
+                self.server_relative_url,
+                os.path.basename(local_file_path)
+            ),
+            data=file_as_bytes,
+            headers=headers["POST"]
+        )
+
+        logger.debug("POST: %s", post.status_code)
+        if post.status_code not in self._connector.success_list:
+            raise UploadException(post.content)
+
+        return SharepointFile.from_dict(
+            self._connector,
+            self.server_relative_url,
+            post.json()["d"]
+        )
+
+
+class SharepointView:
+    def __init__(self):
+        self.id = ""
+        self.title = ""
+        self.paged = False
+        self.hidden = False
+        self.list_id = None
+        self.read_only = False
+        self.server_relative_url = ""
+
+        self.raw_data = None
+        self._connector = None
+
+    @classmethod
+    def from_dict(cls, connector, list_id, data):
+        view = cls()
+        view.list_id = list_id
+        view.raw_data = data
+        view._connector = connector
+
+        view.id = data["Id"]
+        view.paged = data["Paged"]
+        view.title = data["Title"]
+        view.hidden = data["Hidden"]
+        view.read_only = data["ReadOnlyView"]
+        view.server_relative_url = data["ServerRelativeUrl"]
+
+        return view
+
+    def __repr__(self):
+        return "SharepointView(%s)" % self.title
+
+    def add_field(self, field_name):
+        """
+        Adds a specific field to the ListView.
+
+        :param field_name: Required, field name to be added
+        """
+        logging.info("Add %s field to the view.", field_name)
+
+        headers["POST"]["X-RequestDigest"] = self._connector.digest()
+        post = self._connector.session.post(
+            self._connector.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/addviewfield('{}')".format(
+                self.list_id,
+                self.id,
+                field_name
+            ),
+            headers=headers["POST"]
+        )
+
+        logging.debug("POST: %s", post.status_code)
+        if post.status_code not in self._connector.success_list:
+            raise CantCreateNewFieldException(post.content)
+
+    def change_field_index(self, field_name, field_index):
+        """
+        Adds a specific field to the View.
+
+        :param field_name: Required, field name to be added
+        """
+        logger.info("Moved %s field to the index %s.", field_name, field_index)
+
+        headers["POST"]["X-RequestDigest"] = self._connector.digest()
+        data = {"field": field_name, "index": field_index}
+        post = self._connector.session.post(
+            self._connector.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/moveviewfieldto".format(
+                self.list_id,
+                self.id
+            ),
             headers=headers["POST"],
             data=json.dumps(data)
         )
-        print("Create new list - {}.".format(list_name))
-        print("POST: {}".format(post.status_code))
-        if post.status_code not in self.success_list:
-            print(post.content)
 
-    def create_new_list_field(self, list_name, data=None, field_name="new_field", field_type=2):
+        logger.debug("POST: %s", post.status_code)
+        if post.status_code not in self._connector.success_list:
+            raise CantChangeFieldIndexException(post.content)
+
+    def remove_field(self, field_name):
+        """
+        Removes a specific field to the View.
+
+        :param field_name: name of the field to be removed
+        """
+        logger.info("Remove %s field to the view.", field_name)
+
+        headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
+        post = self._connector.session.post(
+            self._connector.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeviewfield('{}')".format(
+                self.list_id,
+                self.id,
+                field_name
+            ),
+            headers=headers["DELETE"]
+        )
+
+        logger.debug("POST: %s", post.status_code)
+        if post.status_code not in self._connector.success_list:
+            raise DeleteException(post.content)
+
+    def remove_all_fields(self):
+        """
+        Removes all fields from View.
+        """
+        logger.info("Remove all fields from the view.")
+
+        headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
+        post = self._connector.session.post(
+            self._connector.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeallviewfields".format(
+                self.list_id,
+                self.id
+            ),
+            headers=headers["DELETE"]
+        )
+
+        logger.debug("POST: %s", post.status_code)
+        if post.status_code not in self._connector.success_list:
+            DeleteException(post.content)
+
+    def get_folders(self):
+        """
+        List folders in given relative url.
+        """
+        relative_url = self.server_relative_url.replace("/Forms/AllItems.aspx", "/")
+        logger.info("Get list of folders for %s.", relative_url)
+
+        get = self._connector.session.get(
+            self._connector.base_url + "_api/web/GetFolderByServerRelativeUrl('{}')/Folders".format(relative_url),
+            headers=headers["GET"]
+        )
+
+        logger.debug("GET: {}".format(get.status_code))
+        if get.status_code not in self._connector.success_list:
+            raise ListingException(get.content)
+
+        return {
+            x["Name"]: SharepointFolder.from_dict(self._connector, x)
+            for x in get.json()["d"]["results"]
+        }
+
+
+class SharepointList:
+    def __init__(self):
+        self.id = ""
+        self.title = ""
+        self.hidden = False
+        self.created = None
+        self.raw_data = ""
+        self.description = ""
+        self.entity_type_name = ""
+        self.last_item_deleted_date = ""
+        self.last_item_modified_date = ""
+        self.last_item_user_modified_date = ""
+
+        self._connector = None
+
+    @classmethod
+    def from_dict(cls, connector, data):
+        slist = cls()
+        slist.raw_data = data
+        slist._connector = connector
+
+        slist.id = data["Id"]
+        slist.title = data["Title"]
+        slist.hidden = data["Hidden"]
+        slist.created = data["Created"]
+        slist.description = data["Description"]
+        slist.entity_type_name = data["EntityTypeName"]
+        slist.last_item_deleted_date = data["LastItemDeletedDate"]
+        slist.last_item_modified_date = data["LastItemModifiedDate"]
+        slist.last_item_userModified_date = data["LastItemUserModifiedDate"]
+
+        return slist
+
+    def __repr__(self):
+        return "SharepointList(%s)" % self.title
+
+    def add_field(self, field_name, data=None, field_type=2):
         """
         Creates new column fields in SharepointList
         By default creates new Text field with "new_field" name.
 
-        :param list_name: Required, provide the name of the list you want to modify as String.
+        :param field_name: The name of new field as String.
         :param data: Optional Parameter when you need to use your own data
-        :param field_name: Optional, the name of new field as String, by default set to "new_field"
         :param field_type: Please choose a field type as Integer, by default set to text field.
 
         Field Types:
@@ -174,601 +534,283 @@ class SharePointConnector:
                                   set of hours in a day).
         30  WorkflowEventType   - No Information.
         31  MaxItems	        - Specifies the maximum number of items. Value = 31.
-
-        :return: Returns REST response.
         """
         # Updates headers by new Digest Value.
-        headers["POST"]["X-RequestDigest"] = self.digest()
+        headers["POST"]["X-RequestDigest"] = self._connector.digest()
         # Sets data
         if data is None:
             data = {
                 '__metadata': {'type': 'SP.Field'},
-                'Title': str(field_name),
+                'Title': str(self.title),
                 'FieldTypeKind': field_type
             }
         # Performs REST request
-        post = self.session.post(
-            self.base_url + "_api/web/lists/GetByTitle('{}')".format(list_name) + "/fields",
+        post = self._connector.session.post(
+            self._connector.base_url + "_api/web/lists/GetByTitle('{}')".format(self.title) + "/fields",
             headers=headers["POST"],
             data=json.dumps(data)
         )
-        print("Create new list header of name {} and type {} for {}.".format(field_name, field_type, list_name))
-        print("POST: {}".format(post.status_code))
-        if post.status_code not in self.success_list:
-            print(post.content)
+        logger.info("Create new list header of name %s and type %s for %s.", field_name, field_type, self.title)
+        logger.debug("POST: %s", post.status_code)
 
-    def update_list(self, list_guid, data=None):
+        if post.status_code not in self._connector.success_list:
+            raise CantCreateNewFieldException(post.content)
+
+    def update_list(self, data):
         """
         Updates a SharepointList Information
-        By default changes only a list Title.
 
-        :param list_guid: Required, individual id of the List you want to Modify
-        :param data: Optional Parameter when you need to use your own data
-        :return: Returns a REST response.
+        :param data: Parameter when you need to use your own data
         """
-        headers["PUT"]["X-RequestDigest"] = self.digest()
-        put = self.session.post(
-            self.base_url + "_api/web/lists(guid'{}')".format(list_guid),
+        logger.info("Update list name for list of GUID: %s", self.id)
+
+        headers["PUT"]["X-RequestDigest"] = self._connector.digest()
+        put = self._connector.session.post(
+            self._connector.base_url + "_api/web/lists(guid'{}')".format(self.id),
             headers=headers["PUT"],
             data=json.dumps(data),
         )
-        print("Update list name for list of GUID: {}".format(list_guid))
-        print("PUT: {}".format(put.status_code))
-        if put.status_code not in self.success_list:
-            print(put.content)
 
-    def delete_list(self, list_guid):
-        """
-        Deletes a Sharepoint List by its GUID.
+        logger.debug("PUT: %s", put.status_code)
+        if put.status_code not in self._connector.success_list:
+            raise UpdateException(put.content)
 
-        :param list_guid: Required, individual id of Sharepoint List.
-        :return: Returns a REST response.
+    def delete_list(self):
         """
-        headers["DELETE"]["X-RequestDigest"] = self.digest()
-        delete = self.session.delete(
-            self.base_url + "_api/web/lists(guid'{}')".format(list_guid),
+        Deletes a Sharepoint List.
+        """
+        logger.info("Delete list of GUID: %s", self.id)
+
+        headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
+        delete = self._connector.session.delete(
+            self._connector.base_url + "_api/web/lists(guid'{}')".format(self.id),
             headers=headers["DELETE"]
         )
-        print("Delete list of GUID: {}".format(list_guid))
-        print("DELETE: {}".format(delete.status_code))
-        if delete.status_code not in self.success_list:
-            print(delete.content)
 
-    def get_all_list_views(self, list_guid):
+        logger.debug("DELETE: %s", delete.status_code)
+
+        if delete.status_code not in self._connector.success_list:
+            raise DeleteException(delete.content)
+
+    def get_views(self):
         """
-        Gets all views for a given list.
-        :param list_guid: Required, individual id of Sharepoint List.
-        :return: Returns a REST response.
+        Gets all views for list.
         """
-        get = self.session.get(
-            self.base_url + "_api/web/lists(guid'{}')/views".format(list_guid),
+        logging.info("Get all list views for %s." % self.id)
+
+        get = self._connector.session.get(
+            self._connector.base_url + "_api/web/lists(guid'{}')/views".format(self.id),
             headers=headers["GET"]
         )
-        print("Get all list.")
-        print("GET: {}".format(get.status_code))
-        if get.status_code not in self.success_list:
-            print(get.content)
-        else:
-            return get.json()["d"]["results"]
 
-    def add_fields_to_view(self, list_guid, view_guid, field_name):
-        """
-        Adds a specific field to the ListView.
+        logging.debug("GET: %s", get.status_code)
 
-        :param list_guid: Required, individual id of Sharepoint List.
-        :param view_guid: Required, individual id of Sharepoint View
-        :param field_name: Required, field name to be added
-        :return: Starus of the REST request.
-        """
-        headers["POST"]["X-RequestDigest"] = self.digest()
-        post = self.session.post(
-            self.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/addviewfield('{}')".format(
-                list_guid,
-                view_guid,
-                field_name
-            ),
-            headers=headers["POST"]
-        )
-        print("Add {} field to the view.".format(field_name))
-        print("POST: {}".format(post.status_code))
-        if post.status_code not in self.success_list:
-            print(post.content)
-        else:
-            return post.json()["d"]
+        if get.status_code not in self._connector.success_list:
+            raise ListingException(get.content)
 
-    def change_field_index_in_view(self, list_guid, view_guid, field_name, field_index):
-        """
-        Adds a specific field to the ListView.
-
-        :param list_guid: Required, individual id of Sharepoint List.
-        :param view_guid: Required, individual id of Sharepoint View
-        :param field_name: Required, field name to be added
-        :return: Starus of the REST request.
-        """
-        headers["POST"]["X-RequestDigest"] = self.digest()
-        data = {
-            "field": field_name,
-            "index": field_index
+        return {
+            x["Title"]: SharepointView.from_dict(self._connector, self.id, x)
+            for x in get.json()["d"]["results"]
         }
+
+
+class SharePointConnector:
+    """
+    Class responsible for performing most of common SharePoint Operations.
+    Use also to authenticate access to the SharepointSite and to get a digest value for POST requests.
+    """
+
+    def __init__(self, login, password, site_url, login_url=None):
+        self.session = requests.Session()
+        self.success_list = [200, 201, 202]
+
+        if not login_url:
+            parsed = list(urlparse(site_url))
+            parsed[2] = ""  # remove the path from the url
+            login_url = urlunparse(parsed)
+
+        self.login_url = login_url if login_url.endswith("/") else login_url + "/"
+        self.base_url = site_url if site_url.endswith("/") else site_url + "/"
+
+        self.login = login
+        self.password = password
+
+    def digest(self):
+        """
+        Helper function.
+        Gets a digest value for POST requests.
+
+        :return: Returns a REST response.
+        """
+        data = self.session.post(
+            self.base_url + "_api/contextinfo",
+            headers=headers["GET"]
+        )
+        return data.json()["d"]["GetContextWebInformation"]["FormDigestValue"]
+
+    def _get_security_token(self):
+        """
+        Grabs a security Token to authenticate to Office 365 services.
+
+        Inspired by shareplum; https://github.com/jasonrollins/shareplum
+        """
+        body = """
+            <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+                        xmlns:a="http://www.w3.org/2005/08/addressing"
+                        xmlns:u="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
+              <s:Header>
+                <a:Action s:mustUnderstand="1">http://schemas.xmlsoap.org/ws/2005/02/trust/RST/Issue</a:Action>
+                <a:ReplyTo>
+                  <a:Address>http://www.w3.org/2005/08/addressing/anonymous</a:Address>
+                </a:ReplyTo>
+                <a:To s:mustUnderstand="1">https://login.microsoftonline.com/extSTS.srf</a:To>
+                <o:Security s:mustUnderstand="1"
+                   xmlns:o="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+                  <o:UsernameToken>
+                    <o:Username>%s</o:Username>
+                    <o:Password>%s</o:Password>
+                  </o:UsernameToken>
+                </o:Security>
+              </s:Header>
+              <s:Body>
+                <t:RequestSecurityToken xmlns:t="http://schemas.xmlsoap.org/ws/2005/02/trust">
+                  <wsp:AppliesTo xmlns:wsp="http://schemas.xmlsoap.org/ws/2004/09/policy">
+                    <a:EndpointReference>
+                      <a:Address>%s</a:Address>
+                    </a:EndpointReference>
+                  </wsp:AppliesTo>
+                  <t:KeyType>http://schemas.xmlsoap.org/ws/2005/05/identity/NoProofKey</t:KeyType>
+                  <t:RequestType>http://schemas.xmlsoap.org/ws/2005/02/trust/Issue</t:RequestType>
+                  <t:TokenType>urn:oasis:names:tc:SAML:1.0:assertion</t:TokenType>
+                </t:RequestSecurityToken>
+              </s:Body>
+            </s:Envelope>""" % (self.login, self.password, self.base_url)
+
+        response = self.session.post(
+            'https://login.microsoftonline.com/extSTS.srf',
+            body,
+            headers={'accept': 'application/json;odata=verbose'}
+        )
+
+        xmldoc = etree.fromstring(response.content)
+        token = xmldoc.find(
+            './/{http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd}BinarySecurityToken'
+        )
+
+        if token is None:
+            raise Exception('Check username/password and rootsite')
+
+        return token.text
+
+    def authenticate(self):
+        """
+        Checks users authentication.
+        Returns True/False dependently of user access.
+
+        :return: Boolean
+        """
+        token = self._get_security_token()
+        url = self.login_url + '_forms/default.aspx?wa=wsignin1.0'
+        response = self.session.post(url, data=token)
+
+        if response.status_code not in self.success_list:
+            raise LoginException(response.text)
+
+        response = self.session.get(self.base_url, headers=headers["GET"])
+        if response.status_code not in self.success_list:
+            raise LoginException(response.text)
+
+    def get_lists(self):
+        """
+        Gets all lists.
+
+        :return: Returns a REST response.
+        """
+        logging.info("Called get_lists()")
+
+        get = self.session.get(
+            self.base_url + "_api/web/lists?$top=5000",
+            headers=headers["GET"]
+        )
+
+        logging.debug("GET: %s", get.status_code)
+        if get.status_code not in self.success_list:
+            raise ListingException(get.content)
+
+        return {
+            x["Title"]: SharepointList.from_dict(self, x)
+            for x in get.json()["d"]["results"]
+        }
+
+    def create_new_list(self, list_name, data=None, description="", allow_content_types=True,
+                        base_template=100, content_types_enabled=True):
+        """
+        Use to create new SharePoint List.
+        By default creates new List of any Type with "new_list" name and blank name.
+
+        Basic Types:
+            100	Custom list
+            101	Document library
+            102	Survey
+            103	Links
+            104	Announcements
+            105	Contacts
+            106	Calendar
+            107	Tasks
+            108	Discussion board
+            109	Picture library
+            110	Data sources for a site
+            111	Site template gallery
+            112	User Information
+            113	Web Part gallery
+
+        :param list_name: Name of new List.
+        :param data: Optional Parameter when you need to use your own data
+        :param description: Description of the list - Optional, by default set to blank.
+        :param base_template: Optional, determines the list type
+        :param allow_content_types: Optional
+        :param content_types_enabled: Optional
+        :return: Returns a REST response.
+        """
+        headers["POST"]["X-RequestDigest"] = self.digest()
+        if data is None:
+            data = {
+                '__metadata': {'type': 'SP.List'},
+                'AllowContentTypes': allow_content_types,
+                'BaseTemplate': base_template,
+                'ContentTypesEnabled': content_types_enabled,
+                'Description': '{}'.format(description),
+                'Title': '{}'.format(list_name)
+            }
         post = self.session.post(
-            self.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/moveviewfieldto".format(
-                list_guid,
-                view_guid
-            ),
+            self.base_url + "_api/web/lists",
             headers=headers["POST"],
             data=json.dumps(data)
         )
-        print("Moved {} field to the index {}.".format(field_name, field_index))
-        print("POST: {}".format(post.status_code))
+        logger.info("Create new list - {}.".format(list_name))
+        logger.debug("POST: {}".format(post.status_code))
         if post.status_code not in self.success_list:
-            print(post.content)
-        else:
-            return post.json()["d"]
+            CantCreateNewListException(post.content)
 
-
-    def remove_fields_from_view(self, list_guid, view_guid, field_name):
-        """
-        Removes a specific field to the ListView.
-
-        :param list_guid: Required, individual id of Sharepoint List.
-        :param view_guid: Required, individual id of Sharepoint View
-        :param field_name: name of the field to be removed
-        :return: Status of REST request.
-        """
-        headers["DELETE"]["X-RequestDigest"] = self.digest()
-        post = self.session.post(
-            self.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeviewfield('{}')".format(
-                list_guid,
-                view_guid,
-                field_name
-            ),
-            headers=headers["DELETE"]
-        )
-        print("Remove {} field to the view.".format(field_name))
-        print("POST: {}".format(post.status_code))
-        if post.status_code not in self.success_list:
-            print(post.content)
-        else:
-            return post.json()["d"]
-
-    def get_list_items(self, list_name):
-        """
-        Gets all List Items from Sharepoint List of given Name
-
-        :param list_name: Required, name of the list from which items will be downloaded.
-        :return: Returns REST response.
-        """
-        get = self.session.get(
-            self.base_url + "_api/web/lists/GetByTitle('{}')".format(list_name) + "/items?$top=5000",
-            headers=headers["GET"]
-        )
-        print("Get list items from {}.".format(list_name))
-        print("GET: {}".format(get.status_code))
-        if get.status_code not in self.success_list:
-            print(get.content)
-        else:
-            return get.json()["d"]["results"]
-
-    def remove_all_fields_from_view(self, list_guid, view_guid):
-        """
-        Removes all fields from List view.
-
-        :param list_guid: Required, individual id of Sharepoint List.
-        :param view_guid: REquired, individual id of Sharepoint View
-        :return: Status of the REST request
-        """
-        headers["DELETE"]["X-RequestDigest"] = self.digest()
-        post = self.session.post(
-            self.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeallviewfields".format(
-                list_guid,
-                view_guid,
-            ),
-            headers=headers["DELETE"]
-        )
-        print("Remove all fields from the view.")
-        print("POST: {}".format(post.status_code))
-        if post.status_code not in self.success_list:
-            print(post.content)
-        else:
-            return post.json()["d"]
-
-    def create_new_list_item(self, list_name, data=None):
-        """
-        Creates a new List item in the list of given name.
-
-        :param list_name: Required, name of the list in which items will be created.
-        :param data: Optional Parameter when you need to use your own data
-        :return: Returns a REST response.
-        """
-        headers["POST"]['X-RequestDigest'] = self.digest()
-        if data is None:
-            data = {
-                '__metadata': {
-                    'type': 'SP.Data.{}ListItem'.format(list_name.title())
-                },
-                'Title': 'New_list_Item'
-            }
-        post = self.session.post(
-            self.base_url + "_api/web/lists/GetByTitle('{}')".format(list_name) + "/items",
-            data=json.dumps(data),
-            headers=headers["POST"]
-        )
-        print("Create new list item in {}.".format(list_name))
-        print("POST: {}".format(post.status_code))
-        if post.status_code not in self.success_list:
-            print(post.content)
-
-    def update_list_item(self, list_name, item_id=0, data=None):
-        """
-        Updates already existing SharePoint list item.
-
-        :param list_name: Required, name of the list in which item is stored.
-        :param item_id: Required, an individual id of the item in the list.
-        :param data: Required, provide a data by which the item will be updated
-        :return: Returns a REST response.
-        """
-        headers["PUT"]['X-RequestDigest'] = self.digest()
-        put = self.session.post(
-            self.base_url + "+api/web/lists/GetByTitle('{}')".format(list_name) + "/items('{}')".format(item_id),
-            data=json.dumps(data),
-            headers=headers["PUT"]
-        )
-        print("Update list item of id {} in {}.".format(item_id, list_name))
-        print("PUT: {}".format(put.status_code))
-        if put.status_code not in self.success_list:
-            print(put.content)
-
-    def delete_list_item(self, list_name, item_id=0):
-        """
-        Deletes a list item in SharePoint list of given name.
-
-        :param list_name: Required, name of the list in which item is stored.
-        :param item_id: Required, an individual id of the item in the list.
-        :return: Returns a REST response.
-        """
-        headers["DELETE"]["X-RequestDigest"] = self.digest()
-        delete = self.session.delete(
-            self.base_url + "_api/web/lists/GetByTitle('{}')".format(list_name) + "/items('{}')".format(item_id),
-            headers=headers["DELETE"]
-        )
-        print("Delete list item of id {} in {}.".format(item_id, list_name))
-        print("DELETE: {}".format(delete.status_code))
-        if delete.status_code not in self.success_list:
-            print(delete.content)
-
-    # Add functions related to document libraries and lists attachments
-    def get_folder_information(self, folder_name):
+    def get_folder_by_relative_url(self, server_relative_url):
         """
         Gets all information about given folder directory.
 
         :param folder_name:  Required, name of the folder
         :return: Returns REST response
         """
+        logger.info("Get information for %s folder.", server_relative_url)
+
         get = self.session.get(
-            self.base_url + "_api/web/GetFolderByServerRelativeUrl('/{}')".format(folder_name),
+            self.base_url + "_api/web/GetFolderByServerRelativeUrl('{}')".format(server_relative_url),
             headers=headers["GET"]
         )
-        print("Get information for {} folder.".format(folder_name))
-        print("GET: {}".format(get.status_code))
+
+        logger.debug("GET: %s", get.status_code)
         if get.status_code not in self.success_list:
-            print(get.content)
-        else:
-            return get.json()["d"]
+            raise ListingException(get.content)
 
-            # Add functions related to file manipulation
-
-    def get_file(self, file_name, destination_library):
-        """
-        Gets file from folder/library as binary
-
-        :param file_name: Required, name of the file
-        :param destination_library: Required, folder/library where file exists.
-        :return:
-        """
-        get = self.session.get(
-            self.base_url + "_api/web/GetFolderByServerRelativeUrl('/{}')/Files('{}')/$value".format(
-                destination_library,
-                file_name
-            ),
-            headers=headers["GET"]
-        )
-        print("Get {} from {}.".format(file_name, destination_library))
-        print("GET: {}".format(get.status_code))
-        if get.status_code not in self.success_list:
-            print(get.content)
-        else:
-            return get.content
-
-    def get_files_from_folder(self, folder_name):
-        """
-        Gets all files from given library/folder
-
-        :param folder_name: Required
-        :return:
-        """
-        get = self.session.get(
-            self.base_url + "_api/web/GetFolderByServerRelativeUrl('/{}')/Files".format(
-                folder_name
-            ),
-            headers=headers["GET"]
-        )
-        print("Get all files from {}.".format(folder_name))
-        print("GET: {}".format(get.status_code))
-        if get.status_code not in self.success_list:
-            print(get.content)
-        else:
-            return get.json()["d"]["results"]
-
-    def create_new_file(self, file_path, destination_library):
-        """
-        Uploads a file to given library/folder.
-
-        :param file_path: Required, file as path
-        :param destination_library: Required, destination of upload
-        :return: Returns REST response
-        """
-        headers["POST"]["X-RequestDigest"] = self.digest()
-        file = open(file_path, "rb")
-        file_as_bytes = bytearray(file.read())
-
-        post = self.session.post(
-            self.base_url + "_api/web/GetFolderByServerRelativeUrl('/{}')/Files/add(url='{}',overwrite=true)".format(
-                destination_library,
-                os.path.basename(file.name)
-            ),
-            data=file_as_bytes,
-            headers=headers["POST"]
-        )
-        print(
-            "Add file '{}' to library '{}'.".format(
-                os.path.basename(file.name),
-                destination_library
-            )
-        )
-        print("POST: {}".format(post.status_code))
-        if post.status_code not in self.success_list:
-            print(post.content)
-        else:
-            return post.json()["d"]
-
-    def update_file(self, file_path, destination_library):
-        """
-        Updates a file in given library/folder.
-
-        :param file_path: Required, file as path
-        :param destination_library: Required, destination of upload
-        :return: Returns REST response
-        """
-        headers["PUT"]["X-RequestDigest"] = self.digest()
-        file = open(file_path, "rb")
-        file_as_bytes = bytearray(file.read())
-
-        put = self.session.post(
-            self.base_url + "_api/web/GetFileByServerRelativeUrl('/{}/{}')/$value".format(
-                destination_library,
-                os.path.basename(file.name),
-                headers=headers["PUT"],
-                data=file_as_bytes
-            )
-        )
-        print(
-            "Update file '{}' in library '{}'.".format(
-                os.path.basename(file.name),
-                destination_library
-            )
-        )
-        print("PUT: {}".format(put.status_code))
-        if put.status_code not in self.success_list:
-            print(put.content)
-        else:
-            return put.json()["d"]
-
-    def file_check_out(self, file_name, destination_library):
-        """
-        Check outs a file in given library/folder.
-
-        :param file_name: Required, file name to check out
-        :param destination_library: Required, folder where file exists
-        :return: Returns REST response
-        """
-        headers["POST"]["X-RequestDigest"] = self.digest()
-        post = self.session.post(
-            self.base_url + "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckOut()".format(
-                destination_library,
-                file_name
-            ),
-            headers=headers["POST"]
-        )
-        print(
-            "CheckOut file '{}' in library '{}'.".format(
-                os.path.basename(file_name),
-                destination_library
-            )
-        )
-        print("POST: {}".format(post.status_code))
-        if post.status_code not in self.success_list:
-            print(post.content)
-        else:
-            return post.json()["d"]
-
-    def file_check_in(self, file_name, destination_library, comment, check_in_type=0):
-        """
-        Checks in a file in given library/folder.
-
-        :param file_name: Required, file name to check in
-        :param destination_library: Required, folder where file exists
-        :param comment: Optional, Comment with which file will be checked in.
-        :param check_in_type: Optional
-        :return: Returns REST response
-        """
-        headers["POST"]["X-RequestDigest"] = self.digest()
-        post = self.session.post(
-            self.base_url + "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckIn\
-            (comment='{}',checkintype={})".format(
-                destination_library,
-                file_name,
-                comment,
-                check_in_type
-            ),
-            headers=headers["POST"]
-        )
-        print(
-            "CheckIn file '{}' in library '{}' with comment '{}'.".format(
-                os.path.basename(file_name),
-                destination_library,
-                comment
-            )
-        )
-        print("POST: {}".format(post.status_code))
-        if post.status_code not in self.success_list:
-            print(post.content)
-        else:
-            return post.json()["d"]
-
-    def delete_file(self, file_name, destination_library):
-        """
-        Deletes a file in given library/folder.
-
-        :param file_name: Required, file name to delete
-        :param destination_library: Required, folder where file exists
-        :return: Returns REST response
-        """
-        headers["DELETE"]["X-RequestDigest"] = self.digest()
-        delete = self.session.delete(
-            self.base_url + "_api/web/GetFileByServerRelativeUrl('/{}/{}')".format(
-                destination_library,
-                file_name
-            ),
-            headers=headers["DELETE"]
-        )
-        print(
-            "Delete file '{}' from library '{}'.".format(
-                os.path.basename(file_name),
-                destination_library
-            )
-        )
-
-        print("POST: {}".format(delete.status_code))
-        if delete.status_code not in self.success_list:
-            print(delete.content)
-        else:
-            return delete.json()["d"]
-
-    def get_list_item_attachments(self, list_name, item_id):
-        """
-        Retrieves the list of avalible attachments for given list item
-
-        :param list_name: Requiered
-        :param item_id: Required
-        :return: Returns REST response
-        """
-        get = self.session.get(
-            self.base_url + "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles/".format(
-                list_name,
-                item_id
-            ),
-            headers=headers["GET"]
-        )
-        print("Get attachments for item ID: {} from {} list.".format(list_name, item_id))
-        print("GET: {}".format(get.status_code))
-        if get.status_code not in self.success_list:
-            print(get.content)
-        else:
-            return get.json()["d"]["results"]
-
-    def get_list_item_attachment(self, list_name, item_id, file_name):
-        """
-        Retrieves single list item attachment
-
-        :param list_name: Required
-        :param item_id: REquired
-        :param file_name: Required
-        :return: Returns REST response.
-        """
-        get = self.session.get(
-            self.base_url + "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles('{}')/$value".format(
-                list_name,
-                item_id,
-                file_name
-            ),
-            headers=headers["GET"]
-        )
-        print("Get {} for item ID: {} from {} list.".format(file_name, list_name, item_id))
-        print("GET: {}".format(get.status_code))
-        if get.status_code not in self.success_list:
-            print(get.content)
-        else:
-            return get.json()["d"]["results"]
-
-    def create_list_item_attachment(self, list_name, item_id, file_path):
-        """
-        Creates a list item attachment
-
-        :param list_name: Required
-        :param item_id: Required
-        :param file_path: Required
-        :return: Returns REST response
-        """
-        headers["POST"]["X-RequestDigest"] = self.digest()
-        file = open(file_path, "rb")
-        file_to_bites = bytearray(file.read())
-
-        post = self.session.post(
-            self.base_url + "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles/ add(FileName='{}')".format(
-                list_name,
-                item_id,
-                os.path.basename(file.name)
-            ),
-            headers=headers["POST"],
-            data=file_to_bites
-        )
-        print(
-            "Add file '{}' to list item '{}' in {}.".format(
-                os.path.basename(file.name),
-                item_id,
-                list_name
-            )
-        )
-        print("POST: {}".format(post.status_code))
-        if post.status_code not in self.success_list:
-            print(post.content)
-        else:
-            return post.json()["d"]
-
-    def update_list_item_attachment(self, list_name, item_id, file_path):
-        """
-        Updates list item attachment
-
-        :param list_name: Required
-        :param item_id: Required
-        :param file_path: Required
-        :return: Returns REST response
-        """
-        headers["PUT"]["X-RequestDigest"] = self.digest()
-        file = open(file_path, "rb")
-        file_to_bites = bytearray(file.read())
-
-        put = self.session.post(
-            self.base_url + "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles('{}')/$value".format(
-                list_name,
-                item_id,
-                os.path.basename(file.name)
-            ),
-            headers=headers["POST"],
-            data=file_to_bites
-        )
-        print(
-            "Update file '{}' for list item '{}' in {}.".format(
-                os.path.basename(file.name),
-                item_id,
-                list_name
-            )
-        )
-        print("PUT: {}".format(put.status_code))
-        if put.status_code not in self.success_list:
-            print(put.content)
-        else:
-            return put.json()["d"]
+        return SharepointFolder.from_dict(self, get.json()["d"])
 
     def custom_query(self, query, request_type="GET", data=None):
         """
@@ -784,150 +826,55 @@ class SharePointConnector:
                 self.base_url + query,
                 headers=headers["GET"]
             )
-            print("GET: {}".format(get.status_code))
+            logger.debug("GET: %s", get.status_code)
             if get.status_code not in self.success_list:
-                print(get.content)
-            else:
-                return get.json()["d"]
+                raise SharepointException(get.content)
+
+            return get.json()["d"]
+
         elif request_type == "POST":
             if data is None:
                 raise AttributeError("Data needs to be provided to perform this request.")
-            else:
-                headers["POST"]["X-RequestDigest"] = self.digest()
-                post = self.session.post(
-                    self.base_url + query,
-                    headers=headers["POST"],
-                    data=json.dumps(data)
-                )
-                if post.status_code not in self.success_list:
-                    print(post.content)
-                else:
-                    return post.json()["d"]
+
+            headers["POST"]["X-RequestDigest"] = self.digest()
+            post = self.session.post(
+                self.base_url + query,
+                headers=headers["POST"],
+                data=json.dumps(data)
+            )
+            if post.status_code not in self.success_list:
+                raise SharepointException(post.content)
+
+            return post.json()["d"]
+
         elif request_type == "PUT":
             if data is None:
                 raise AttributeError("Data needs to be provided to perform this request.")
-            else:
-                headers["PUT"]["X-RequestDigest"] = self.digest()
-                post = self.session.post(
-                    self.base_url + query,
-                    headers=headers["PUT"],
-                    data=json.dumps(data)
-                )
-                if post.status_code not in self.success_list:
-                    print(post.content)
-                else:
-                    return post.json()["d"]
+
+            headers["PUT"]["X-RequestDigest"] = self.digest()
+            post = self.session.post(
+                self.base_url + query,
+                headers=headers["PUT"],
+                data=json.dumps(data)
+            )
+            if post.status_code not in self.success_list:
+                raise SharepointException(post.content)
+
+            return post.json()["d"]
+
         elif request_type == "DELETE":
             if data is None:
                 raise AttributeError("Data needs to be provided to perform this request.")
-            else:
-                headers["DELETE"]["X-RequestDigest"] = self.digest()
-                post = self.session.post(
-                    self.base_url + query,
-                    headers=headers["DELETE"],
-                )
-                if post.status_code not in self.success_list:
-                    print(post.content)
-                else:
-                    return post.json()["d"]
+
+            headers["DELETE"]["X-RequestDigest"] = self.digest()
+            post = self.session.post(
+                self.base_url + query,
+                headers=headers["DELETE"],
+            )
+            if post.status_code not in self.success_list:
+                raise SharepointException(post.content)
+
+            return post.json()["d"]
+
         else:
             raise AttributeError("Wrong request type.")
-
-    def digest(self):
-        """
-        Helper function.
-        Gets a digest value for POST requests.
-
-        :return: Returns a REST response.
-        """
-        data = self.session.post(
-            self.base_url + "_api/contextinfo",
-            headers=headers["GET"]
-        )
-        return data.json()["d"]["GetContextWebInformation"]["FormDigestValue"]
-
-    def authenticate(self):
-        """
-        Checks users authentication.
-        Returns True/False dependently of user access.
-
-        :return: Boolean
-        """
-        data = self.session.get(
-            self.base_url,
-            headers=headers["GET"]
-        )
-        if data.status_code == 200:
-            return True
-        else:
-            return False
-
-
-class SharePointDataParser:
-    def list_item_data(self, list_name, data):
-        output_data = {
-            '__metadata': {
-                'type': self.list_item_meta(list_name)
-            },
-        }
-        for key, value in data.items():
-            output_data[key] = value
-        return output_data
-
-    @staticmethod
-    def list_data(data, allow_content_types=True, base_template=100, content_types_enabled=True):
-        output_data = {
-            '__metadata': {
-                'type': 'SP.List'
-            },
-            'AllowContentTypes': allow_content_types,
-            'BaseTemplate': base_template,
-            'ContentTypesEnabled': content_types_enabled
-        }
-        for key, value in data.items():
-            output_data[key] = value
-        return output_data
-
-    @staticmethod
-    def folder_data(data):
-        output_data = {
-            '__metadata': {
-                'type': 'SP.Folder'
-            },
-        }
-        for key, value in data.items():
-            output_data[key] = value
-        return output_data
-
-    @staticmethod
-    def list_field_data(data):
-        # todo: list field data
-        pass
-
-    @staticmethod
-    def list_item_meta(list_name):
-        return "SP.Data." + list_name[0].upper() + list_name[1::] + "ListItem"
-
-
-class PermissionHandler:
-    def __init__(self, login, password, base_url, domain="eur"):
-        self.session = requests.Session()
-        self.base_url = base_url + "/"
-        self.session.auth = HttpNtlmAuth("{}\\{}".format(domain, login), "{}".format(password))
-        self.success_list = [200, 201, 202]
-
-    def authenticate(self):
-        """
-        Checks users authentication.
-        Returns True/False dependently of user access.
-
-        :return: Boolean
-        """
-        data = self.session.get(
-            self.base_url,
-            headers=headers["GET"]
-        )
-        if data.status_code == 200:
-            return True
-        else:
-            return False
