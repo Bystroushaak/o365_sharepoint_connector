@@ -1,16 +1,16 @@
 from distutils.core import setup
 
 setup(
-    name='easy_sharepoint',
-    version='0.1',
-    packages=['easy_sharepoint'],
-    url='',
+    name='o365_sharepoint_connector',
+    version='0.1.0',
+    packages=['o365_sharepoint_connector'],
+    url='https://github.com/Bystroushaak/Office365SharepointConnector',
     license='MIT',
-    author='Krzysztof Growinski',
-    author_email='k.growisnski@outlook.com',
-    description='Sharepoint List Operations Python Library',
+    author='Bystroushaak',
+    author_email='bystrousak@kitakitsune.org',
+    description='Class based API for the Office365 Sharepoint',
     install_requires=[
+        "lxml",
         "requests",
-        "requests_ntlm"
     ]
 )
