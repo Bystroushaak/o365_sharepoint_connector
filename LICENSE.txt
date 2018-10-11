@@ -1,6 +1,7 @@
 MIT License
 
-Copyright (c) 2017 Krzysztof Growinski
+Copyright (c) 2018 Bystroushaak (https://github.com/Bystroushaak/Office365SharepointConnector)
+Copyright (c) 2017 Krzysztof Growinski (https://github.com/krzysztofgrowinski/EasySharePoint)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
