@@ -120,6 +120,9 @@ class SharepointFile:
     def __repr__(self):
         return "SharepointFile(%s)" % self.server_relative_url
 
+    def _compose_url(self, *args):
+        return self._connector._compose_url(*args)
+
     def check_in(self, comment="", check_in_type=0):
         """
         Checks in a file.
@@ -133,8 +136,8 @@ class SharepointFile:
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
         post = self._connector.session.post(
-            self._connector.base_url + "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckIn\
-            (comment='{}',checkintype={})".format(
+            self._compose_url(
+                "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckIn(comment='{}',checkintype={})",
                 self.folder_relative_url,
                 self.name,
                 comment,
@@ -155,7 +158,8 @@ class SharepointFile:
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
         post = self._connector.session.post(
-            self._connector.base_url + "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckOut()".format(
+            self._compose_url(
+                "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckOut()",
                 self.folder_relative_url,
                 self.name
             ),
@@ -171,7 +175,8 @@ class SharepointFile:
         Gets file from folder/library as binary
         """
         logger.info("Get %s from %s.", self.name, self.server_relative_url)
-        url = self._connector.base_url + "_api/web/GetFolderByServerRelativeUrl('{}')/Files('{}')/$value".format(
+        url = self._compose_url(
+            "_api/web/GetFolderByServerRelativeUrl('{}')/Files('{}')/$value",
             self.folder_relative_url,
             self.name
         )
@@ -196,10 +201,7 @@ class SharepointFile:
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
         delete = self._connector.session.delete(
-            self._connector.base_url + "_api/web/GetFileByServerRelativeUrl('/{}/{}')".format(
-                self.folder_relative_url,
-                self.name
-            ),
+            self._compose_url("_api/web/GetFileByServerRelativeUrl('/{}/{}')", self.folder_relative_url, self.name),
             headers=headers["DELETE"]
         )
 
@@ -240,6 +242,9 @@ class SharepointFolder:
     def __repr__(self):
         return "SharepointDir(%s)" % self.name
 
+    def _compose_url(self, *args):
+        return self._connector._compose_url(*args)
+
     def get_files(self):
         """
         Gets all files from given library/folder
@@ -247,9 +252,7 @@ class SharepointFolder:
         logger.info("Get all files from %s.", self.server_relative_url)
 
         get = self._connector.session.get(
-            self._connector.base_url + "_api/web/GetFolderByServerRelativeUrl('/{}')/Files".format(
-                self.server_relative_url
-            ),
+            self._compose_url("_api/web/GetFolderByServerRelativeUrl('/{}')/Files", self.server_relative_url),
             headers=headers["GET"]
         )
 
@@ -276,7 +279,8 @@ class SharepointFolder:
             file_as_bytes = bytearray(f.read())
 
         post = self._connector.session.post(
-            self._connector.base_url + "_api/web/GetFolderByServerRelativeUrl('/{}')/Files/add(url='{}',overwrite=true)".format(
+            self._compose_url(
+                "_api/web/GetFolderByServerRelativeUrl('/{}')/Files/add(url='{}',overwrite=true)",
                 self.server_relative_url,
                 os.path.basename(local_file_path)
             ),
@@ -327,6 +331,9 @@ class SharepointView:
     def __repr__(self):
         return "SharepointView(%s)" % self.title
 
+    def _compose_url(self, *args):
+        return self._connector._compose_url(*args)
+
     def add_field(self, field_name):
         """
         Adds a specific field to the ListView.
@@ -337,7 +344,8 @@ class SharepointView:
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
         post = self._connector.session.post(
-            self._connector.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/addviewfield('{}')".format(
+            self._compose_url(
+                "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/addviewfield('{}')",
                 self.list_id,
                 self.id,
                 field_name
@@ -360,7 +368,8 @@ class SharepointView:
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
         data = {"field": field_name, "index": field_index}
         post = self._connector.session.post(
-            self._connector.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/moveviewfieldto".format(
+            self._compose_url(
+                "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/moveviewfieldto",
                 self.list_id,
                 self.id
             ),
@@ -382,7 +391,8 @@ class SharepointView:
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
         post = self._connector.session.post(
-            self._connector.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeviewfield('{}')".format(
+            self._compose_url(
+                "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeviewfield('{}')",
                 self.list_id,
                 self.id,
                 field_name
@@ -402,7 +412,8 @@ class SharepointView:
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
         post = self._connector.session.post(
-            self._connector.base_url + "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeallviewfields".format(
+            self._compose_url(
+                "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeallviewfields",
                 self.list_id,
                 self.id
             ),
@@ -421,7 +432,7 @@ class SharepointView:
         logger.info("Get list of folders for %s.", relative_url)
 
         get = self._connector.session.get(
-            self._connector.base_url + "_api/web/GetFolderByServerRelativeUrl('{}')/Folders".format(relative_url),
+            self._compose_url("_api/web/GetFolderByServerRelativeUrl('{}')/Folders", relative_url),
             headers=headers["GET"]
         )
 
@@ -470,6 +481,9 @@ class SharepointList:
 
     def __repr__(self):
         return "SharepointList(%s)" % self.title
+
+    def _compose_url(self, *args):
+        return self._connector._compose_url(*args)
 
     def add_field(self, field_name, data=None, field_type=2):
         """
@@ -546,7 +560,7 @@ class SharepointList:
             }
         # Performs REST request
         post = self._connector.session.post(
-            self._connector.base_url + "_api/web/lists/GetByTitle('{}')".format(self.title) + "/fields",
+            self._compose_url("_api/web/lists/GetByTitle('{}')/fields", self.title),
             headers=headers["POST"],
             data=json.dumps(data)
         )
@@ -566,7 +580,7 @@ class SharepointList:
 
         headers["PUT"]["X-RequestDigest"] = self._connector.digest()
         put = self._connector.session.post(
-            self._connector.base_url + "_api/web/lists(guid'{}')".format(self.id),
+            self._compose_url("_api/web/lists(guid'{}')", self.id),
             headers=headers["PUT"],
             data=json.dumps(data),
         )
@@ -583,7 +597,7 @@ class SharepointList:
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
         delete = self._connector.session.delete(
-            self._connector.base_url + "_api/web/lists(guid'{}')".format(self.id),
+            self._compose_url("_api/web/lists(guid'{}')", self.id),
             headers=headers["DELETE"]
         )
 
@@ -599,7 +613,7 @@ class SharepointList:
         logging.info("Get all list views for %s." % self.id)
 
         get = self._connector.session.get(
-            self._connector.base_url + "_api/web/lists(guid'{}')/views".format(self.id),
+            self._compose_url("_api/web/lists(guid'{}')/views", self.id),
             headers=headers["GET"]
         )
 
@@ -635,6 +649,14 @@ class SharePointConnector:
         self.login = login
         self.password = password
 
+    def _compose_url(self, url, *args):
+        new_url = self.base_url + url
+
+        if not args:
+            return new_url
+
+        return new_url.format(*args)
+
     def digest(self):
         """
         Helper function.
@@ -643,7 +665,7 @@ class SharePointConnector:
         :return: Returns a REST response.
         """
         data = self.session.post(
-            self.base_url + "_api/contextinfo",
+            self._compose_url("_api/contextinfo"),
             headers=headers["GET"]
         )
         return data.json()["d"]["GetContextWebInformation"]["FormDigestValue"]
@@ -729,7 +751,7 @@ class SharePointConnector:
         logging.info("Called get_lists()")
 
         get = self.session.get(
-            self.base_url + "_api/web/lists?$top=5000",
+            self._compose_url("_api/web/lists?$top=5000"),
             headers=headers["GET"]
         )
 
@@ -783,7 +805,7 @@ class SharePointConnector:
                 'Title': '{}'.format(list_name)
             }
         post = self.session.post(
-            self.base_url + "_api/web/lists",
+            self._compose_url("_api/web/lists"),
             headers=headers["POST"],
             data=json.dumps(data)
         )
@@ -802,7 +824,7 @@ class SharePointConnector:
         logger.info("Get information for %s folder.", server_relative_url)
 
         get = self.session.get(
-            self.base_url + "_api/web/GetFolderByServerRelativeUrl('{}')".format(server_relative_url),
+            self._compose_url("_api/web/GetFolderByServerRelativeUrl('{}')", server_relative_url),
             headers=headers["GET"]
         )
 
