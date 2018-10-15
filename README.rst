@@ -11,7 +11,10 @@ Features
 
 o365_sharepoint_connector utilizes Microsoft Sharepoint REST architecture to work with lists, views, folders and files.
 
-Installation::
+Installation
+++++++++++++
+
+::
 
     pip3 install --user o365_sharepoint_connector
 
@@ -45,4 +48,4 @@ Usage
 Credit
 ++++++
 
-This fork is based on `EasySharePoint <https://github.com/krzysztofgrowinski/EasySharePoint>`_ library.
+This fork is based on `EasySharePoint <https://github.com/krzysztofgrowinski/EasySharePoint>`_ library, but instead of working with raw JSON responses, you work with classes and methods.
