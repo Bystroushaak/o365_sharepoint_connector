@@ -1,4 +1,5 @@
 import os
+import os.path
 import json
 import logging
 from urllib.parse import urlparse
@@ -446,6 +447,187 @@ class SharepointView:
         }
 
 
+class SharepointListItemAttachment:
+    def __init__(self):
+        self.raw_data = {}
+        self._connector = None
+
+        self.id = ""
+        self.title = ""
+
+    @classmethod
+    def from_dict(cls, connector, list_title, data):
+        item = cls()
+        item.raw_data = data
+        item._connector = connector
+        item.list_title = list_title
+
+        item.id = data["Id"]
+        item.title = data["Title"]
+
+        return item
+
+    def __repr__(self):
+        return "SharepointListItemAttachment(id=%s)" % self.id
+
+    def _compose_url(self, *args):
+        return self._connector._compose_url(*args)
+
+    def update_attachment(self, list_name, item_id, file_path):
+        """
+        Updates list item attachment
+
+        :param list_name: Required
+        :param item_id: Required
+        :param file_path: Required
+        :return: Returns REST response
+        """
+        logger.info(
+            "Update file '%s' for list item '%s' in %s.",
+            os.path.basename(file_path),
+            self.id,
+            self.title
+        )
+
+        headers["PUT"]["X-RequestDigest"] = self._connector.digest()
+        with open(file_path, "rb") as f:
+            file_to_bites = bytearray(f.read())
+
+        put = self._connector.session.post(
+            self._compose_url(
+                "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles('{}')/$value",
+                self.title,
+                self.id,
+                os.path.basename(file_path)
+            ),
+            headers=headers["POST"],
+            data=file_to_bites
+        )
+
+        logger.debug("PUT: %s", put.status_code)
+        if put.status_code not in self._connector.success_list:
+            raise UpdateException(put.content)
+
+        return put.json()["d"]
+
+
+class SharepointListItem:
+    def __init__(self):
+        self.raw_data = {}
+        self._connector = None
+        self.list_title = ""
+
+        self.id = None
+        self.guid = ""
+        self.title = ""
+        self.created = ""
+        self.modified = ""
+        self.author_id = None
+        self.editor_id = None
+        self.content_type_id = ""
+        self.checkout_user_id = None
+        self.file_system_object_type = None
+        self.server_redirected_embed_uri = None
+        self.server_redirected_embed_url = ""
+
+    @classmethod
+    def from_dict(cls, connector, list_title, data):
+        item = cls()
+        item.raw_data = data
+        item._connector = connector
+        item.list_title = list_title
+
+        item.id = data["Id"]
+        item.guid = data["GUID"]
+        item.title = data["Title"]
+        item.created = data["Created"]
+        item.modified = data["Modified"]
+        item.author_id = data["AuthorId"]
+        item.editor_id = data["EditorId"]
+        item.content_type_id = data["ContentTypeId"]
+        item.checkout_user_id = data["CheckoutUserId"]
+        item.file_system_object_type = data["FileSystemObjectType"]
+        item.server_redirected_embed_uri = data["ServerRedirectedEmbedUri"]
+        item.server_redirected_embed_url = data["ServerRedirectedEmbedUrl"]
+
+        return item
+
+    def __repr__(self):
+        return "SharepointListItem(id=%s)" % self.id
+
+    def _compose_url(self, *args):
+        return self._connector._compose_url(*args)
+
+    def delete(self):
+        """
+        Deletes a list item in SharePoint list of given name.
+
+        :param list_name: Required, name of the list in which item is stored.
+        :param item_id: Required, an individual id of the item in the list.
+        :return: Returns a REST response.
+        """
+        logger.info("Delete list item of id %s in %s.", self.id, self.list_title)
+
+        headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
+        delete = self._connector.session.delete(
+            self._compose_url("_api/web/lists/GetByTitle('{}')/items('{}')", self.list_title, self.id),
+            headers=headers["DELETE"]
+        )
+
+        logger.debug("DELETE: %s", delete.status_code)
+        if delete.status_code not in self._connector.success_list:
+            raise DeleteException(delete.content)
+
+    def get_attachments(self):
+        """
+        Retrieves the list of avalible attachments for given list item
+
+        :param list_name: Requiered
+        :param item_id: Required
+        :return: Returns REST response
+        """
+        logger.info("Get attachments for item ID: %s from %s list.", self.list_title, self.id)
+
+        get = self._connector.session.get(
+            self._compose_url(
+                "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles/",
+                self.list_title,
+                self.id
+            ),
+            headers=headers["GET"]
+        )
+
+        logger.debug("GET: %s", get.status_code)
+        if get.status_code not in self._connector.success_list:
+            raise ListingException(get.content)
+
+        return get.json()["d"]["results"]
+
+    def update_list_item(self, data):
+        """
+        Updates already existing SharePoint list item.
+
+        :param list_name: Required, name of the list in which item is stored.
+        :param item_id: Required, an individual id of the item in the list.
+        :param data: Required, provide a data by which the item will be updated
+        :return: Returns a REST response.
+        """
+        logger.info("Update list item of id %s in %s.", self.id, self.list_title)
+
+        headers["PUT"]['X-RequestDigest'] = self._connector.digest()
+        put = self._connector.session.post(
+            self._compose_url("+api/web/lists/GetByTitle('{}')/items('{}')", self.list_title, self.id),
+            data=json.dumps(data),
+            headers=headers["PUT"]
+        )
+
+        logger.debug("PUT: %s", put.status_code)
+        if put.status_code not in self._connector.success_list:
+            raise UpdateException(put.content)
+
+        return SharepointListItem.from_dict(self._connector, self.title, post.json()["d"])
+
+
 class SharepointList:
     def __init__(self):
         self.id = ""
@@ -626,6 +808,54 @@ class SharepointList:
             x["Title"]: SharepointView.from_dict(self._connector, self.id, x)
             for x in get.json()["d"]["results"]
         }
+
+    def get_items(self):
+        """
+        Gets all List Items from Sharepoint List of given Name
+
+        :return: Returns REST response.
+        """
+        logging.info("Get list items from %s.", self.title)
+
+        get = self._connector.session.get(
+            self._compose_url("_api/web/lists/GetByTitle('{}')/items?$top=5000".format(self.title)),
+            headers=headers["GET"]
+        )
+
+        logging.debug("GET: %s", get.status_code)
+
+        if get.status_code not in self._connector.success_list:
+            raise ListingException(get.content)
+
+        return [
+            SharepointListItem.from_dict(self._connector, self.title, x)
+            for x in get.json()["d"]["results"]
+        ]
+
+    def add_item(self, title):
+        """
+        Creates a new List item in the list of given name.
+
+        :param list_name: Required, name of the list in which items will be created.
+        :param data: Optional Parameter when you need to use your own data
+        :return: Returns a REST response.
+        """
+        logger.info("Create new list item %s in %s.", self.title, self.title)
+
+        headers["POST"]['X-RequestDigest'] = self._connector.digest()
+        data = {
+            'Title': title,
+            '__metadata': {'type': 'SP.Data.{}ListItem'.format(self.title)},
+        }
+        post = self._connector.session.post(
+            self._compose_url("_api/web/lists/GetByTitle('{}')/items", self.title),
+            data=json.dumps(data),
+            headers=headers["POST"]
+        )
+
+        logger.debug("POST: %s", post.status_code)
+        if post.status_code not in self._connector.success_list:
+            raise CantCreateNewListException(post.content)
 
 
 class SharePointConnector:
