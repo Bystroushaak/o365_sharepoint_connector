@@ -88,6 +88,56 @@ class _SharepointElementBase:
     def _compose_url(self, *args):
         return self._connector._compose_url(*args)
 
+    def _parse_exception(self, keywords):
+        exception = None
+        if "exception" in keywords:
+            exception = keywords["exception"]
+            del keywords["exception"]
+
+        return exception, keywords
+
+    def get(self, url, *url_params, **keywords):
+        url = self._compose_url(url, *url_params)
+        logger.debug("URL: %s", url)
+
+        exception, keywords = self._parse_exception(keywords)
+
+        result = self._connector.session.get(url, **keywords)
+        logger.debug("GET: %s", result.status_code)
+
+        if exception and result.status_code not in self._connector.success_list:
+                raise exception(result.content)
+
+        return result
+
+    def post(self, url, *url_params, **keywords):
+        url = self._compose_url(url, *url_params)
+        logger.debug("URL: %s", url)
+
+        exception, keywords = self._parse_exception(keywords)
+
+        result = self._connector.session.post(url, **keywords)
+        logger.debug("POST: %s", result.status_code)
+
+        if exception and result.status_code not in self._connector.success_list:
+                raise exception(result.content)
+
+        return result
+
+    def delete(self, url, *url_params, **keywords):
+        url = self._compose_url(url, *url_params)
+        logger.debug("URL: %s", url)
+
+        exception, keywords = self._parse_exception(keywords)
+
+        result = self._connector.session.session.delete(url, **keywords)
+        logger.debug("DELETE: %s", result.status_code)
+
+        if exception and result.status_code not in self._connector.success_list:
+                raise exception(result.content)
+
+        return result
+
 
 class SharepointFile(_SharepointElementBase):
     def __init__(self):
@@ -138,54 +188,41 @@ class SharepointFile(_SharepointElementBase):
         )
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
-        post = self._connector.session.post(
-            self._compose_url(
-                "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckIn(comment='{}',checkintype={})",
-                self.folder_relative_url,
-                self.name,
-                comment,
-                check_in_type
-            ),
-            headers=headers["POST"]
+        self.post(
+            "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckIn(comment='{}',checkintype={})",
+            self.folder_relative_url,
+            self.name,
+            comment,
+            check_in_type,
+            headers=headers["POST"],
+            exception=CheckInException
         )
-
-        logger.debug("POST: %s", post.status_code)
-        if post.status_code not in self._connector.success_list:
-            raise CheckInException(post.content)
 
     def check_out(self):
         logger.info("CheckOut file '%s' in library '%s'.", os.path.basename(self.name), self.folder_relative_url)
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
-        post = self._connector.session.post(
-            self._compose_url(
-                "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckOut()",
-                self.folder_relative_url,
-                self.name
-            ),
-            headers=headers["POST"]
+        self.post(
+            "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckOut()",
+            self.folder_relative_url,
+            self.name,
+            headers=headers["POST"],
+            exception=CheckOutException
         )
-
-        logger.debug("POST: %s", post.status_code)
-        if post.status_code not in self._connector.success_list:
-            CheckOutException(post.content)
 
     def get_content(self):
         """
         Gets file from folder/library as binary
         """
         logger.info("Get %s from %s.", self.name, self.server_relative_url)
-        url = self._compose_url(
+
+        self.get(
             "_api/web/GetFolderByServerRelativeUrl('{}')/Files('{}')/$value",
             self.folder_relative_url,
-            self.name
+            self.name,
+            headers=headers["GET"],
+            exception=ListingException
         )
-        logger.debug("URL: %s", url)
-        get = self._connector.session.get(url, headers=headers["GET"])
-
-        logger.debug("GET: %s", get.status_code)
-        if get.status_code not in self._connector.success_list:
-            raise ListingException(get.content)
 
         return get.content
 
@@ -200,14 +237,13 @@ class SharepointFile(_SharepointElementBase):
         logger.info("Delete file '%s' from library '%s'.", os.path.basename(self.name), self.folder_relative_url)
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        delete = self._connector.session.delete(
-            self._compose_url("_api/web/GetFileByServerRelativeUrl('/{}/{}')", self.folder_relative_url, self.name),
-            headers=headers["DELETE"]
+        self.delete(
+            "_api/web/GetFileByServerRelativeUrl('/{}/{}')",
+            self.folder_relative_url,
+            self.name,
+            headers=headers["DELETE"],
+            exception=DeleteException
         )
-
-        logger.debug("POST: %s", delete.status_code)
-        if delete.status_code not in self._connector.success_list:
-            raise DeleteException(delete.content)
 
 
 class SharepointFolder(_SharepointElementBase):
@@ -248,14 +284,12 @@ class SharepointFolder(_SharepointElementBase):
         """
         logger.info("Get all files from %s.", self.server_relative_url)
 
-        get = self._connector.session.get(
-            self._compose_url("_api/web/GetFolderByServerRelativeUrl('/{}')/Files", self.server_relative_url),
-            headers=headers["GET"]
+        get = self.get(
+            "_api/web/GetFolderByServerRelativeUrl('/{}')/Files",
+            self.server_relative_url,
+            headers=headers["GET"],
+            exception=ListingException
         )
-
-        logger.debug("GET: %s", get.status_code)
-        if get.status_code not in self._connector.success_list:
-            raise ListingException(get.content)
 
         return {
             x["Name"]: SharepointFile.from_dict(self._connector, self.server_relative_url, x)
@@ -275,19 +309,14 @@ class SharepointFolder(_SharepointElementBase):
         with open(local_file_path, "rb") as f:
             file_as_bytes = bytearray(f.read())
 
-        post = self._connector.session.post(
-            self._compose_url(
-                "_api/web/GetFolderByServerRelativeUrl('/{}')/Files/add(url='{}',overwrite=true)",
-                self.server_relative_url,
-                os.path.basename(local_file_path)
-            ),
+        post = self.post(
+            "_api/web/GetFolderByServerRelativeUrl('/{}')/Files/add(url='{}',overwrite=true)",
+            self.server_relative_url,
+            os.path.basename(local_file_path),
             data=file_as_bytes,
-            headers=headers["POST"]
+            headers=headers["POST"],
+            exception=UploadException
         )
-
-        logger.debug("POST: %s", post.status_code)
-        if post.status_code not in self._connector.success_list:
-            raise UploadException(post.content)
 
         return SharepointFile.from_dict(
             self._connector,
@@ -337,19 +366,14 @@ class SharepointView(_SharepointElementBase):
         logging.info("Add %s field to the view.", field_name)
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
-        post = self._connector.session.post(
-            self._compose_url(
-                "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/addviewfield('{}')",
-                self.list_id,
-                self.id,
-                field_name
-            ),
-            headers=headers["POST"]
+        self.post(
+            "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/addviewfield('{}')",
+            self.list_id,
+            self.id,
+            field_name,
+            headers=headers["POST"],
+            exception=CantCreateNewFieldException
         )
-
-        logging.debug("POST: %s", post.status_code)
-        if post.status_code not in self._connector.success_list:
-            raise CantCreateNewFieldException(post.content)
 
     def change_field_index(self, field_name, field_index):
         """
@@ -360,20 +384,14 @@ class SharepointView(_SharepointElementBase):
         logger.info("Moved %s field to the index %s.", field_name, field_index)
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
-        data = {"field": field_name, "index": field_index}
-        post = self._connector.session.post(
-            self._compose_url(
-                "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/moveviewfieldto",
-                self.list_id,
-                self.id
-            ),
+        self.post(
+            "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/moveviewfieldto",
+            self.list_id,
+            self.id,
             headers=headers["POST"],
-            data=json.dumps(data)
+            data=json.dumps({"field": field_name, "index": field_index}),
+            exception=CantChangeFieldIndexException
         )
-
-        logger.debug("POST: %s", post.status_code)
-        if post.status_code not in self._connector.success_list:
-            raise CantChangeFieldIndexException(post.content)
 
     def remove_field(self, field_name):
         """
@@ -384,19 +402,14 @@ class SharepointView(_SharepointElementBase):
         logger.info("Remove %s field to the view.", field_name)
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        post = self._connector.session.post(
-            self._compose_url(
-                "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeviewfield('{}')",
-                self.list_id,
-                self.id,
-                field_name
-            ),
-            headers=headers["DELETE"]
+        self.post(
+            "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeviewfield('{}')",
+            self.list_id,
+            self.id,
+            field_name,
+            headers=headers["DELETE"],
+            exception=DeleteException
         )
-
-        logger.debug("POST: %s", post.status_code)
-        if post.status_code not in self._connector.success_list:
-            raise DeleteException(post.content)
 
     def remove_all_fields(self):
         """
@@ -405,18 +418,13 @@ class SharepointView(_SharepointElementBase):
         logger.info("Remove all fields from the view.")
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        post = self._connector.session.post(
-            self._compose_url(
-                "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeallviewfields",
-                self.list_id,
-                self.id
-            ),
-            headers=headers["DELETE"]
+        self.post(
+            "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeallviewfields",
+            self.list_id,
+            self.id,
+            headers=headers["DELETE"],
+            exception=DeleteException
         )
-
-        logger.debug("POST: %s", post.status_code)
-        if post.status_code not in self._connector.success_list:
-            DeleteException(post.content)
 
     def get_folders(self):
         """
@@ -425,14 +433,12 @@ class SharepointView(_SharepointElementBase):
         relative_url = self.server_relative_url.replace("/Forms/AllItems.aspx", "/")
         logger.info("Get list of folders for %s.", relative_url)
 
-        get = self._connector.session.get(
-            self._compose_url("_api/web/GetFolderByServerRelativeUrl('{}')/Folders", relative_url),
-            headers=headers["GET"]
+        get = self.get(
+            "_api/web/GetFolderByServerRelativeUrl('{}')/Folders",
+            relative_url,
+            headers=headers["GET"],
+            exception=ListingException
         )
-
-        logger.debug("GET: {}".format(get.status_code))
-        if get.status_code not in self._connector.success_list:
-            raise ListingException(get.content)
 
         return {
             x["Name"]: SharepointFolder.from_dict(self._connector, x)
@@ -463,7 +469,7 @@ class SharepointListItemAttachment(_SharepointElementBase):
     def __repr__(self):
         return "SharepointListItemAttachment(id=%s)" % self.id
 
-    def update_attachment(self, list_name, item_id, file_path):
+    def update_attachment(self, file_path):
         """
         Updates list item attachment
 
@@ -483,20 +489,15 @@ class SharepointListItemAttachment(_SharepointElementBase):
         with open(file_path, "rb") as f:
             file_to_bites = bytearray(f.read())
 
-        put = self._connector.session.post(
-            self._compose_url(
-                "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles('{}')/$value",
-                self.title,
-                self.id,
-                os.path.basename(file_path)
-            ),
+        put = self.post(
+            "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles('{}')/$value",
+            self.title,
+            self.id,
+            os.path.basename(file_path),
             headers=headers["POST"],
-            data=file_to_bites
+            data=file_to_bites,
+            exception=UpdateException
         )
-
-        logger.debug("PUT: %s", put.status_code)
-        if put.status_code not in self._connector.success_list:
-            raise UpdateException(put.content)
 
         return put.json()["d"]
 
@@ -556,14 +557,13 @@ class SharepointListItem(_SharepointElementBase):
         logger.info("Delete list item of id %s in %s.", self.id, self.list_title)
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        delete = self._connector.session.delete(
-            self._compose_url("_api/web/lists/GetByTitle('{}')/items('{}')", self.list_title, self.id),
-            headers=headers["DELETE"]
+        self.delete(
+            "_api/web/lists/GetByTitle('{}')/items('{}')",
+            self.list_title,
+            self.id,
+            headers=headers["DELETE"],
+            exception=DeleteException
         )
-
-        logger.debug("DELETE: %s", delete.status_code)
-        if delete.status_code not in self._connector.success_list:
-            raise DeleteException(delete.content)
 
     def get_attachments(self):
         """
@@ -575,18 +575,13 @@ class SharepointListItem(_SharepointElementBase):
         """
         logger.info("Get attachments for item ID: %s from %s list.", self.list_title, self.id)
 
-        get = self._connector.session.get(
-            self._compose_url(
-                "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles/",
-                self.list_title,
-                self.id
-            ),
-            headers=headers["GET"]
+        get = self.get(
+            "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles/",
+            self.list_title,
+            self.id,
+            headers=headers["GET"],
+            exception=ListingException
         )
-
-        logger.debug("GET: %s", get.status_code)
-        if get.status_code not in self._connector.success_list:
-            raise ListingException(get.content)
 
         return get.json()["d"]["results"]
 
@@ -602,17 +597,16 @@ class SharepointListItem(_SharepointElementBase):
         logger.info("Update list item of id %s in %s.", self.id, self.list_title)
 
         headers["PUT"]['X-RequestDigest'] = self._connector.digest()
-        put = self._connector.session.post(
-            self._compose_url("+api/web/lists/GetByTitle('{}')/items('{}')", self.list_title, self.id),
+        put = self.post(
+            "+api/web/lists/GetByTitle('{}')/items('{}')",
+            self.list_title,
+            self.id,
             data=json.dumps(data),
-            headers=headers["PUT"]
+            headers=headers["PUT"],
+            exception=UpdateException
         )
 
-        logger.debug("PUT: %s", put.status_code)
-        if put.status_code not in self._connector.success_list:
-            raise UpdateException(put.content)
-
-        return SharepointListItem.from_dict(self._connector, self.title, post.json()["d"])
+        return SharepointListItem.from_dict(self._connector, self.title, put.json()["d"])
 
 
 class SharepointList(_SharepointElementBase):
@@ -651,13 +645,12 @@ class SharepointList(_SharepointElementBase):
     def __repr__(self):
         return "SharepointList(%s)" % self.title
 
-    def add_field(self, field_name, data=None, field_type=2):
+    def add_field(self, field_name, field_type=2):
         """
         Creates new column fields in SharepointList
         By default creates new Text field with "new_field" name.
 
         :param field_name: The name of new field as String.
-        :param data: Optional Parameter when you need to use your own data
         :param field_type: Please choose a field type as Integer, by default set to text field.
 
         Field Types:
@@ -715,26 +708,21 @@ class SharepointList(_SharepointElementBase):
         30  WorkflowEventType   - No Information.
         31  MaxItems	        - Specifies the maximum number of items. Value = 31.
         """
-        # Updates headers by new Digest Value.
-        headers["POST"]["X-RequestDigest"] = self._connector.digest()
-        # Sets data
-        if data is None:
-            data = {
-                '__metadata': {'type': 'SP.Field'},
-                'Title': str(self.title),
-                'FieldTypeKind': field_type
-            }
-        # Performs REST request
-        post = self._connector.session.post(
-            self._compose_url("_api/web/lists/GetByTitle('{}')/fields", self.title),
-            headers=headers["POST"],
-            data=json.dumps(data)
-        )
         logger.info("Create new list header of name %s and type %s for %s.", field_name, field_type, self.title)
-        logger.debug("POST: %s", post.status_code)
 
-        if post.status_code not in self._connector.success_list:
-            raise CantCreateNewFieldException(post.content)
+        data = {
+            '__metadata': {'type': 'SP.Field'},
+            'Title': str(field_name),
+            'FieldTypeKind': field_type
+        }
+        headers["POST"]["X-RequestDigest"] = self._connector.digest()
+        self.post(
+            "_api/web/lists/GetByTitle('{}')/fields",
+            self.title,
+            headers=headers["POST"],
+            data=json.dumps(data),
+            exception=CantCreateNewFieldException
+        )
 
     def update_list(self, data):
         """
@@ -745,15 +733,13 @@ class SharepointList(_SharepointElementBase):
         logger.info("Update list name for list of GUID: %s", self.id)
 
         headers["PUT"]["X-RequestDigest"] = self._connector.digest()
-        put = self._connector.session.post(
-            self._compose_url("_api/web/lists(guid'{}')", self.id),
+        self.post(
+            "_api/web/lists(guid'{}')",
+            self.id,
             headers=headers["PUT"],
             data=json.dumps(data),
+            exception=UpdateException
         )
-
-        logger.debug("PUT: %s", put.status_code)
-        if put.status_code not in self._connector.success_list:
-            raise UpdateException(put.content)
 
     def delete_list(self):
         """
@@ -762,15 +748,12 @@ class SharepointList(_SharepointElementBase):
         logger.info("Delete list of GUID: %s", self.id)
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        delete = self._connector.session.delete(
-            self._compose_url("_api/web/lists(guid'{}')", self.id),
-            headers=headers["DELETE"]
+        self.delete(
+            "_api/web/lists(guid'{}')",
+            self.id,
+            headers=headers["DELETE"],
+            exception=DeleteException
         )
-
-        logger.debug("DELETE: %s", delete.status_code)
-
-        if delete.status_code not in self._connector.success_list:
-            raise DeleteException(delete.content)
 
     def get_views(self):
         """
@@ -778,15 +761,12 @@ class SharepointList(_SharepointElementBase):
         """
         logging.info("Get all list views for %s." % self.id)
 
-        get = self._connector.session.get(
-            self._compose_url("_api/web/lists(guid'{}')/views", self.id),
-            headers=headers["GET"]
+        get = self.get(
+            "_api/web/lists(guid'{}')/views",
+            self.id,
+            headers=headers["GET"],
+            exception=ListingException
         )
-
-        logging.debug("GET: %s", get.status_code)
-
-        if get.status_code not in self._connector.success_list:
-            raise ListingException(get.content)
 
         return {
             x["Title"]: SharepointView.from_dict(self._connector, self.id, x)
@@ -801,15 +781,12 @@ class SharepointList(_SharepointElementBase):
         """
         logging.info("Get list items from %s.", self.title)
 
-        get = self._connector.session.get(
-            self._compose_url("_api/web/lists/GetByTitle('{}')/items?$top=5000".format(self.title)),
-            headers=headers["GET"]
+        get = self.get(
+            "_api/web/lists/GetByTitle('{}')/items?$top=5000",
+            self.title,
+            headers=headers["GET"],
+            exception=ListingException
         )
-
-        logging.debug("GET: %s", get.status_code)
-
-        if get.status_code not in self._connector.success_list:
-            raise ListingException(get.content)
 
         return [
             SharepointListItem.from_dict(self._connector, self.title, x)
@@ -831,15 +808,15 @@ class SharepointList(_SharepointElementBase):
             'Title': title,
             '__metadata': {'type': 'SP.Data.{}ListItem'.format(self.title)},
         }
-        post = self._connector.session.post(
-            self._compose_url("_api/web/lists/GetByTitle('{}')/items", self.title),
+        post = self.post(
+            "_api/web/lists/GetByTitle('{}')/items",
+            self.title,
             data=json.dumps(data),
-            headers=headers["POST"]
+            headers=headers["POST"],
+            exception=CantCreateNewListException
         )
 
-        logger.debug("POST: %s", post.status_code)
-        if post.status_code not in self._connector.success_list:
-            raise CantCreateNewListException(post.content)
+        return SharepointListItem.from_dict(self._connector, self.title, post.json()["d"])
 
 
 class SharePointConnector:
@@ -1048,21 +1025,23 @@ class SharePointConnector:
 
         return SharepointFolder.from_dict(self, get.json()["d"])
 
-    def custom_query(self, query, request_type="GET", data=None):
+    def custom_query(self, query_url, request_type="GET", data=None):
         """
-        Allows to provide your API end point query
+        Allows to provide your API end point query_url
 
-        :param query: Required, url for your API end point
+        :param query_url: Required, url for your API end point
         :param request_type: Optional, default set to "GET" - type of your request
         :param data: Optional, default set to None. Data for POST or PUT requests
         :return: returns REST response status
         """
         if request_type == "GET":
+
             get = self.session.get(
-                self.base_url + query,
+                self.base_url + query_url,
                 headers=headers["GET"]
             )
             logger.debug("GET: %s", get.status_code)
+
             if get.status_code not in self.success_list:
                 raise SharepointException(get.content)
 
@@ -1070,14 +1049,16 @@ class SharePointConnector:
 
         elif request_type == "POST":
             if data is None:
-                raise AttributeError("Data needs to be provided to perform this request.")
+                raise ValueError("Data needs to be provided to perform this request.")
 
             headers["POST"]["X-RequestDigest"] = self.digest()
             post = self.session.post(
-                self.base_url + query,
+                self.base_url + query_url,
                 headers=headers["POST"],
                 data=json.dumps(data)
             )
+            logger.debug("POST: %s", post.status_code)
+
             if post.status_code not in self.success_list:
                 raise SharepointException(post.content)
 
@@ -1085,32 +1066,36 @@ class SharePointConnector:
 
         elif request_type == "PUT":
             if data is None:
-                raise AttributeError("Data needs to be provided to perform this request.")
+                raise ValueError("Data needs to be provided to perform this request.")
 
             headers["PUT"]["X-RequestDigest"] = self.digest()
-            post = self.session.post(
-                self.base_url + query,
+            put = self.session.post(
+                self.base_url + query_url,
                 headers=headers["PUT"],
                 data=json.dumps(data)
             )
-            if post.status_code not in self.success_list:
-                raise SharepointException(post.content)
+            logger.debug("PUT: %s", put.status_code)
 
-            return post.json()["d"]
+            if put.status_code not in self.success_list:
+                raise SharepointException(put.content)
+
+            return put.json()["d"]
 
         elif request_type == "DELETE":
             if data is None:
-                raise AttributeError("Data needs to be provided to perform this request.")
+                raise ValueError("Data needs to be provided to perform this request.")
 
             headers["DELETE"]["X-RequestDigest"] = self.digest()
-            post = self.session.post(
-                self.base_url + query,
+            delete = self.session.post(
+                self.base_url + query_url,
                 headers=headers["DELETE"],
             )
-            if post.status_code not in self.success_list:
-                raise SharepointException(post.content)
 
-            return post.json()["d"]
+            logger.debug("DELETE: %s", delete.status_code)
+            if delete.status_code not in self.success_list:
+                raise SharepointException(delete.content)
+
+            return delete.json()["d"]
 
         else:
-            raise AttributeError("Wrong request type.")
+            raise ValueError("Wrong request type.")
