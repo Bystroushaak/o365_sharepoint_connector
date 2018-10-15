@@ -81,7 +81,15 @@ class CheckOutException(SharepointException):
     pass
 
 
-class SharepointFile:
+class _SharepointElementBase:
+    def __init__(self):
+        self._connector = None
+
+    def _compose_url(self, *args):
+        return self._connector._compose_url(*args)
+
+
+class SharepointFile(_SharepointElementBase):
     def __init__(self):
         self.raw_data = None
         self._connector = None
@@ -121,13 +129,7 @@ class SharepointFile:
     def __repr__(self):
         return "SharepointFile(%s)" % self.server_relative_url
 
-    def _compose_url(self, *args):
-        return self._connector._compose_url(*args)
-
     def check_in(self, comment="", check_in_type=0):
-        """
-        Checks in a file.
-        """
         logger.info(
             "CheckIn file '%s' in library '%s' with comment '%s'.",
             os.path.basename(self.name),
@@ -152,9 +154,6 @@ class SharepointFile:
             raise CheckInException(post.content)
 
     def check_out(self):
-        """
-        Check outs a file..
-        """
         logger.info("CheckOut file '%s' in library '%s'.", os.path.basename(self.name), self.folder_relative_url)
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
@@ -211,7 +210,7 @@ class SharepointFile:
             raise DeleteException(delete.content)
 
 
-class SharepointFolder:
+class SharepointFolder(_SharepointElementBase):
     def __init__(self):
         self.raw_data = None
         self._connector = None
@@ -242,9 +241,6 @@ class SharepointFolder:
 
     def __repr__(self):
         return "SharepointDir(%s)" % self.name
-
-    def _compose_url(self, *args):
-        return self._connector._compose_url(*args)
 
     def get_files(self):
         """
@@ -300,7 +296,7 @@ class SharepointFolder:
         )
 
 
-class SharepointView:
+class SharepointView(_SharepointElementBase):
     def __init__(self):
         self.id = ""
         self.title = ""
@@ -331,9 +327,6 @@ class SharepointView:
 
     def __repr__(self):
         return "SharepointView(%s)" % self.title
-
-    def _compose_url(self, *args):
-        return self._connector._compose_url(*args)
 
     def add_field(self, field_name):
         """
@@ -447,7 +440,7 @@ class SharepointView:
         }
 
 
-class SharepointListItemAttachment:
+class SharepointListItemAttachment(_SharepointElementBase):
     def __init__(self):
         self.raw_data = {}
         self._connector = None
@@ -469,9 +462,6 @@ class SharepointListItemAttachment:
 
     def __repr__(self):
         return "SharepointListItemAttachment(id=%s)" % self.id
-
-    def _compose_url(self, *args):
-        return self._connector._compose_url(*args)
 
     def update_attachment(self, list_name, item_id, file_path):
         """
@@ -511,7 +501,7 @@ class SharepointListItemAttachment:
         return put.json()["d"]
 
 
-class SharepointListItem:
+class SharepointListItem(_SharepointElementBase):
     def __init__(self):
         self.raw_data = {}
         self._connector = None
@@ -554,9 +544,6 @@ class SharepointListItem:
 
     def __repr__(self):
         return "SharepointListItem(id=%s)" % self.id
-
-    def _compose_url(self, *args):
-        return self._connector._compose_url(*args)
 
     def delete(self):
         """
@@ -628,7 +615,7 @@ class SharepointListItem:
         return SharepointListItem.from_dict(self._connector, self.title, post.json()["d"])
 
 
-class SharepointList:
+class SharepointList(_SharepointElementBase):
     def __init__(self):
         self.id = ""
         self.title = ""
@@ -663,9 +650,6 @@ class SharepointList:
 
     def __repr__(self):
         return "SharepointList(%s)" % self.title
-
-    def _compose_url(self, *args):
-        return self._connector._compose_url(*args)
 
     def add_field(self, field_name, data=None, field_type=2):
         """
