@@ -49,6 +49,10 @@ class CantCreateNewListException(SharepointException):
     pass
 
 
+class CantCreateNewListItemException(SharepointException):
+    pass
+
+
 class CantCreateNewFieldException(SharepointException):
     pass
 
@@ -82,13 +86,38 @@ class CheckOutException(SharepointException):
 
 
 class _SharepointElementBase:
+    """
+    Common parts of the Sharepoint elements factored out into shared base class.
+    """
+
     def __init__(self):
         self._connector = None
 
-    def _compose_url(self, *args):
-        return self._connector._compose_url(*args)
+    def _compose_url(self, relative_url, *args):
+        """
+        Compose SharepointConnector.base_url, relative url and arguments
+        into one string.
+
+        Args:
+            relative_url (str): Relative URL without /. For example `_api/web/GetByTitle('/{}')`.
+            *args (list): List of arguments for formatting function.
+
+        Returns:
+            str: Expanded absolute URL.
+        """
+        return self._connector._compose_url(relative_url, *args)
 
     def _parse_exception(self, keywords):
+        """
+        Read `exception` parameter from `keywords` and remove it.
+
+        Args:
+            keywords (dict): **kwargs parameters for other functions.
+
+        Returns:
+            tuple: (exception, updated_keywords)
+        """
+
         exception = None
         if "exception" in keywords:
             exception = keywords["exception"]
@@ -97,6 +126,21 @@ class _SharepointElementBase:
         return exception, keywords
 
     def get(self, url, *url_params, **keywords):
+        """
+        Send GET request.
+
+        Args:
+            url (str): Relative URL with formatting strings and without slash at the beginning.
+            *url_params (list): Variable number of parameters for formatting strings.
+            **keywords (dict): Variable number of parameters for requests library.
+
+        Raises:
+            exception: Exception defined in `exception` key in `keywords` if the status_code is not
+                       in SharepointConnector.success_list.
+
+        Returns:
+            obj: Requests response object.
+        """
         url = self._compose_url(url, *url_params)
         logger.debug("URL: %s", url)
 
@@ -111,6 +155,21 @@ class _SharepointElementBase:
         return result
 
     def post(self, url, *url_params, **keywords):
+        """
+        Send POST request.
+
+        Args:
+            url (str): Relative URL with formatting strings and without slash at the beginning.
+            *url_params (list): Variable number of parameters for formatting strings.
+            **keywords (dict): Variable number of parameters for requests library.
+
+        Raises:
+            exception: Exception defined in `exception` key in `keywords` if the status_code is not
+                       in SharepointConnector.success_list.
+
+        Returns:
+            obj: Requests response object.
+        """
         url = self._compose_url(url, *url_params)
         logger.debug("URL: %s", url)
 
@@ -125,6 +184,21 @@ class _SharepointElementBase:
         return result
 
     def delete(self, url, *url_params, **keywords):
+        """
+        Send DELETE request.
+
+        Args:
+            url (str): Relative URL with formatting strings and without slash at the beginning.
+            *url_params (list): Variable number of parameters for formatting strings.
+            **keywords (dict): Variable number of parameters for requests library.
+
+        Raises:
+            exception: Exception defined in `exception` key in `keywords` if the status_code is not
+                       in SharepointConnector.success_list.
+
+        Returns:
+            obj: Requests response object.
+        """
         url = self._compose_url(url, *url_params)
         logger.debug("URL: %s", url)
 
@@ -140,6 +214,9 @@ class _SharepointElementBase:
 
 
 class SharepointFile(_SharepointElementBase):
+    """
+    Wrapper for file in the SharepointFolder.
+    """
     def __init__(self):
         self.raw_data = None
         self._connector = None
@@ -180,6 +257,16 @@ class SharepointFile(_SharepointElementBase):
         return "SharepointFile(%s)" % self.server_relative_url
 
     def check_in(self, comment="", check_in_type=0):
+        """
+        Check in the file.
+
+        Args:
+            comment (str): Optional comment for the check in. Default empty.
+            check_in_type (int): Optional type of check in. Defautl 0.
+
+        Raises:
+            CheckInException
+        """
         logger.info(
             "CheckIn file '%s' in library '%s' with comment '%s'.",
             os.path.basename(self.name),
@@ -199,6 +286,12 @@ class SharepointFile(_SharepointElementBase):
         )
 
     def check_out(self):
+        """
+        Check out the file.
+
+        Raises:
+            CheckOutException
+        """
         logger.info("CheckOut file '%s' in library '%s'.", os.path.basename(self.name), self.folder_relative_url)
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
@@ -212,11 +305,17 @@ class SharepointFile(_SharepointElementBase):
 
     def get_content(self):
         """
-        Gets file from folder/library as binary
+        Get content of the file from folder/library as binary data.
+
+        Raises:
+            ListingException
+
+        Returns:
+            bytes: Content of the file.
         """
         logger.info("Get %s from %s.", self.name, self.server_relative_url)
 
-        self.get(
+        get = self.get(
             "_api/web/GetFolderByServerRelativeUrl('{}')/Files('{}')/$value",
             self.folder_relative_url,
             self.name,
@@ -226,18 +325,17 @@ class SharepointFile(_SharepointElementBase):
 
         return get.content
 
-    def delete(self, file_name, destination_library):
+    def delete(self):
         """
-        Deletes a file in given library/folder.
+        Delete this file.
 
-        :param file_name: Required, file name to delete
-        :param destination_library: Required, folder where file exists
-        :return: Returns REST response
+        Raises:
+            DeleteException
         """
         logger.info("Delete file '%s' from library '%s'.", os.path.basename(self.name), self.folder_relative_url)
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        self.delete(
+        super().delete(
             "_api/web/GetFileByServerRelativeUrl('/{}/{}')",
             self.folder_relative_url,
             self.name,
@@ -245,8 +343,40 @@ class SharepointFile(_SharepointElementBase):
             exception=DeleteException
         )
 
+        self.exists = False
+
+    def update(self, local_file_path):
+        """
+        Update content of the file.
+
+        Args:
+            local_file_path (str): Path to the local data.
+
+        Raises:
+            UploadException
+        """
+        logger.info("Update file '%s' with data '%s'.", self.server_relative_url, local_file_path)
+
+        headers["POST"]["X-RequestDigest"] = self._connector.digest()
+
+        with open(local_file_path, "rb") as f:
+            file_as_bytes = bytearray(f.read())
+
+        self.post(
+            "_api/web/GetFolderByServerRelativeUrl('/{}')/Files/add(url='{}',overwrite=true)",
+            self.folder_relative_url,
+            self.name or os.path.basename(local_file_path),
+            data=file_as_bytes,
+            headers=headers["POST"],
+            exception=UploadException
+        )
+
 
 class SharepointFolder(_SharepointElementBase):
+    """
+    Representation of the sharepoint folder.
+    """
+
     def __init__(self):
         self.raw_data = None
         self._connector = None
@@ -280,7 +410,13 @@ class SharepointFolder(_SharepointElementBase):
 
     def get_files(self):
         """
-        Gets all files from given library/folder
+        Gets all :class:`SharepointFile` in this folder.
+
+        Raises:
+            ListingException
+
+        Returns:
+            dict: {name: SharepointFile}
         """
         logger.info("Get all files from %s.", self.server_relative_url)
 
@@ -296,13 +432,21 @@ class SharepointFolder(_SharepointElementBase):
             for x in get.json()["d"]["results"]
         }
 
-    def upload_file(self, local_file_path):
+    def upload_file(self, local_file_path, filename=None):
         """
-        Uploads a file.
+        Upload a file into this directory. If file already exists, it is
+        overwritten.
 
-        :return: SharepointFile
+        Args:
+            local_file_path (str): Path to the local file.
+            filename (str, default None): Optional name of the remote file.
+                If not given, name is taken from the local `local_file_path`.
+
+        Returns:
+            obj: SharepointFile - uploaded file.
         """
-        logger.info("Upload file '%s' to folder '%s'.", local_file_path, self.server_relative_url)
+        filename = filename or os.path.basename(local_file_path)
+        logger.info("Upload file '%s' to folder '%s' as '%s'.", local_file_path, self.server_relative_url, filename)
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
 
@@ -312,7 +456,7 @@ class SharepointFolder(_SharepointElementBase):
         post = self.post(
             "_api/web/GetFolderByServerRelativeUrl('/{}')/Files/add(url='{}',overwrite=true)",
             self.server_relative_url,
-            os.path.basename(local_file_path),
+            filename,
             data=file_as_bytes,
             headers=headers["POST"],
             exception=UploadException
@@ -326,6 +470,9 @@ class SharepointFolder(_SharepointElementBase):
 
 
 class SharepointView(_SharepointElementBase):
+    """
+    Represent View into the list.
+    """
     def __init__(self):
         self.id = ""
         self.title = ""
@@ -359,9 +506,13 @@ class SharepointView(_SharepointElementBase):
 
     def add_field(self, field_name):
         """
-        Adds a specific field to the ListView.
+        Adds a specific field to this view.
 
-        :param field_name: Required, field name to be added
+        Args:
+            field_name (str): Name of the field.
+
+        Raises:
+            CantCreateNewFieldException
         """
         logging.info("Add %s field to the view.", field_name)
 
@@ -377,9 +528,14 @@ class SharepointView(_SharepointElementBase):
 
     def change_field_index(self, field_name, field_index):
         """
-        Adds a specific field to the View.
+        Change index of `field_name` to `field_index`.
 
-        :param field_name: Required, field name to be added
+        Args:
+            field_name (str): Field name to be changed.
+            field_index (int): New index.
+
+        Raises:
+            CantChangeFieldIndexException
         """
         logger.info("Moved %s field to the index %s.", field_name, field_index)
 
@@ -395,9 +551,13 @@ class SharepointView(_SharepointElementBase):
 
     def remove_field(self, field_name):
         """
-        Removes a specific field to the View.
+        Removes a specific field from this view.
 
-        :param field_name: name of the field to be removed
+        Args:
+            field_name (str): Name of the field to be removed.
+
+        Raises:
+            DelteException
         """
         logger.info("Remove %s field to the view.", field_name)
 
@@ -413,7 +573,10 @@ class SharepointView(_SharepointElementBase):
 
     def remove_all_fields(self):
         """
-        Removes all fields from View.
+        Removes all fields from this view.
+
+        Raises:
+            DeleteException
         """
         logger.info("Remove all fields from the view.")
 
@@ -428,7 +591,13 @@ class SharepointView(_SharepointElementBase):
 
     def get_folders(self):
         """
-        List folders in given relative url.
+        Get all folders in this view.
+
+        Raise:
+            ListingException
+
+        Returns:
+            dict: {name: SharepointFolder}
         """
         relative_url = self.server_relative_url.replace("/Forms/AllItems.aspx", "/")
         logger.info("Get list of folders for %s.", relative_url)
@@ -447,6 +616,9 @@ class SharepointView(_SharepointElementBase):
 
 
 class SharepointListItemAttachment(_SharepointElementBase):
+    """
+    Representation of the Attachment for the SharepointList.
+    """
     def __init__(self):
         self.raw_data = {}
         self._connector = None
@@ -469,40 +641,42 @@ class SharepointListItemAttachment(_SharepointElementBase):
     def __repr__(self):
         return "SharepointListItemAttachment(id=%s)" % self.id
 
-    def update_attachment(self, file_path):
+    def update_attachment(self, local_file_path):
         """
-        Updates list item attachment
+        Upload new value for this attachment.
 
-        :param list_name: Required
-        :param item_id: Required
-        :param file_path: Required
-        :return: Returns REST response
+        Args:
+            local_file_path (str): Path to the local resource to be uploaded.
+
+        Raises:
+            UpdateException
         """
         logger.info(
             "Update file '%s' for list item '%s' in %s.",
-            os.path.basename(file_path),
+            os.path.basename(local_file_path),
             self.id,
             self.title
         )
 
         headers["PUT"]["X-RequestDigest"] = self._connector.digest()
-        with open(file_path, "rb") as f:
+        with open(local_file_path, "rb") as f:
             file_to_bites = bytearray(f.read())
 
-        put = self.post(
+        self.post(
             "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles('{}')/$value",
             self.title,
             self.id,
-            os.path.basename(file_path),
+            os.path.basename(local_file_path),
             headers=headers["POST"],
             data=file_to_bites,
             exception=UpdateException
         )
 
-        return put.json()["d"]
-
 
 class SharepointListItem(_SharepointElementBase):
+    """
+    Representation of the item in list.
+    """
     def __init__(self):
         self.raw_data = {}
         self._connector = None
@@ -548,16 +722,15 @@ class SharepointListItem(_SharepointElementBase):
 
     def delete(self):
         """
-        Deletes a list item in SharePoint list of given name.
+        Deletes this list item.
 
-        :param list_name: Required, name of the list in which item is stored.
-        :param item_id: Required, an individual id of the item in the list.
-        :return: Returns a REST response.
+        Raises:
+            DeleteException
         """
         logger.info("Delete list item of id %s in %s.", self.id, self.list_title)
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        self.delete(
+        super().delete(
             "_api/web/lists/GetByTitle('{}')/items('{}')",
             self.list_title,
             self.id,
@@ -567,11 +740,13 @@ class SharepointListItem(_SharepointElementBase):
 
     def get_attachments(self):
         """
-        Retrieves the list of avalible attachments for given list item
+        Retrieves attachments in this item.
 
-        :param list_name: Requiered
-        :param item_id: Required
-        :return: Returns REST response
+        Raises:
+            ListingException
+
+        Returns:
+            list: List of SharepointListItemAttachment objects.
         """
         logger.info("Get attachments for item ID: %s from %s list.", self.list_title, self.id)
 
@@ -583,16 +758,23 @@ class SharepointListItem(_SharepointElementBase):
             exception=ListingException
         )
 
-        return get.json()["d"]["results"]
+        return [
+            SharepointListItemAttachment.from_dict(self._connector, self.title, x)
+            for x in get.json()["d"]["results"]
+        ]
 
     def update_list_item(self, data):
         """
         Updates already existing SharePoint list item.
 
-        :param list_name: Required, name of the list in which item is stored.
-        :param item_id: Required, an individual id of the item in the list.
-        :param data: Required, provide a data by which the item will be updated
-        :return: Returns a REST response.
+        Args:
+            data (dict): Provide raw sharepoint data by which the item will be updated.
+
+        Raise:
+            UpdateException
+
+        Returns:
+            SharepointListItem: Updated instance.
         """
         logger.info("Update list item of id %s in %s.", self.id, self.list_title)
 
@@ -648,10 +830,10 @@ class SharepointList(_SharepointElementBase):
     def add_field(self, field_name, field_type=2):
         """
         Creates new column fields in SharepointList
-        By default creates new Text field with "new_field" name.
 
-        :param field_name: The name of new field as String.
-        :param field_type: Please choose a field type as Integer, by default set to text field.
+        Args:
+            field_name (str): Name of the new field as String.
+            field_type (str, optional): See section on field types. Default is Text.
 
         Field Types:
         0   Invalid             - Not used. Value = 0.
@@ -707,6 +889,9 @@ class SharepointList(_SharepointElementBase):
                                   set of hours in a day).
         30  WorkflowEventType   - No Information.
         31  MaxItems	        - Specifies the maximum number of items. Value = 31.
+
+        Raises:
+            CantCreateNewFieldException
         """
         logger.info("Create new list header of name %s and type %s for %s.", field_name, field_type, self.title)
 
@@ -726,9 +911,13 @@ class SharepointList(_SharepointElementBase):
 
     def update_list(self, data):
         """
-        Updates a SharepointList Information
+        Update this list with raw sharepoint data.
 
-        :param data: Parameter when you need to use your own data
+        Args:
+            data (dict): Raw data.
+
+        Raises:
+            UpdateException
         """
         logger.info("Update list name for list of GUID: %s", self.id)
 
@@ -743,7 +932,10 @@ class SharepointList(_SharepointElementBase):
 
     def delete_list(self):
         """
-        Deletes a Sharepoint List.
+        Delete this list.
+
+        Raises:
+            DeleteException
         """
         logger.info("Delete list of GUID: %s", self.id)
 
@@ -757,7 +949,13 @@ class SharepointList(_SharepointElementBase):
 
     def get_views(self):
         """
-        Gets all views for list.
+        Get all views in this list.
+
+        Raises:
+            ListingException
+
+        Returns:
+            dict: {title: SharepointView}
         """
         logging.info("Get all list views for %s." % self.id)
 
@@ -775,9 +973,13 @@ class SharepointList(_SharepointElementBase):
 
     def get_items(self):
         """
-        Gets all List Items from Sharepoint List of given Name
+        Get all items in this list.
 
-        :return: Returns REST response.
+        Raises:
+            ListingException
+
+        Returns:
+            list: [SharepointListItem]
         """
         logging.info("Get list items from %s.", self.title)
 
@@ -797,9 +999,11 @@ class SharepointList(_SharepointElementBase):
         """
         Creates a new List item in the list of given name.
 
-        :param list_name: Required, name of the list in which items will be created.
-        :param data: Optional Parameter when you need to use your own data
-        :return: Returns a REST response.
+        Raises:
+            CantCreateNewListItemException
+
+        Returns:
+            obj: SharepointListItem - new item.
         """
         logger.info("Create new list item %s in %s.", self.title, self.title)
 
@@ -813,7 +1017,7 @@ class SharepointList(_SharepointElementBase):
             self.title,
             data=json.dumps(data),
             headers=headers["POST"],
-            exception=CantCreateNewListException
+            exception=CantCreateNewListItemException
         )
 
         return SharepointListItem.from_dict(self._connector, self.title, post.json()["d"])
@@ -822,9 +1026,10 @@ class SharepointList(_SharepointElementBase):
 class SharePointConnector:
     """
     Class responsible for performing most of common SharePoint Operations.
-    Use also to authenticate access to the SharepointSite and to get a digest value for POST requests.
-    """
 
+    Use also to authenticate access to the SharepointSite and to get a digest
+    value for POST requests.
+    """
     def __init__(self, login, password, site_url, login_url=None):
         self.session = requests.Session()
         self.success_list = [200, 201, 202]
@@ -841,6 +1046,18 @@ class SharePointConnector:
         self.password = password
 
     def _compose_url(self, url, *args):
+        """
+        Compose URL for given request from base url and parameters.
+
+        Args:
+            url (str): Relative URL without slash at the beginning and with
+                optional formatting parameters.
+            *args (*args): List of arguments for formatting parameters.
+
+        Returns:
+            str: Absolute URL of the service.
+        """
+
         new_url = self.base_url + url
 
         if not args:
@@ -850,10 +1067,10 @@ class SharePointConnector:
 
     def digest(self):
         """
-        Helper function.
-        Gets a digest value for POST requests.
+        Helper function; Gets a digest value for POST requests.
 
-        :return: Returns a REST response.
+        Returns:
+            dict: Returns a REST response.
         """
         data = self.session.post(
             self._compose_url("_api/contextinfo"),
@@ -861,7 +1078,7 @@ class SharePointConnector:
         )
         return data.json()["d"]["GetContextWebInformation"]["FormDigestValue"]
 
-    def _get_security_token(self):
+    def _get_security_token(self, login, password):
         """
         Grabs a security Token to authenticate to Office 365 services.
 
@@ -897,7 +1114,7 @@ class SharePointConnector:
                   <t:TokenType>urn:oasis:names:tc:SAML:1.0:assertion</t:TokenType>
                 </t:RequestSecurityToken>
               </s:Body>
-            </s:Envelope>""" % (self.login, self.password, self.base_url)
+            </s:Envelope>""" % (login, password, self.base_url)
 
         response = self.session.post(
             'https://login.microsoftonline.com/extSTS.srf',
@@ -917,12 +1134,12 @@ class SharePointConnector:
 
     def authenticate(self):
         """
-        Checks users authentication.
-        Returns True/False dependently of user access.
+        Login user.
 
-        :return: Boolean
+        Raises:
+            LoginException in case that user wasn't logged in.
         """
-        token = self._get_security_token()
+        token = self._get_security_token(self.login, self.password)
         url = self.login_url + '_forms/default.aspx?wa=wsignin1.0'
         response = self.session.post(url, data=token)
 
@@ -935,9 +1152,10 @@ class SharePointConnector:
 
     def get_lists(self):
         """
-        Gets all lists.
+        Gets all lists for this sharepoint site.
 
-        :return: Returns a REST response.
+        Returns:
+            dict: {title: SharepointList}
         """
         logging.info("Called get_lists()")
 
@@ -958,8 +1176,8 @@ class SharePointConnector:
     def create_new_list(self, list_name, data=None, description="", allow_content_types=True,
                         base_template=100, content_types_enabled=True):
         """
-        Use to create new SharePoint List.
-        By default creates new List of any Type with "new_list" name and blank name.
+        Used to create new SharePoint List. By default creates new List of any
+        Type named `list_name`.
 
         Basic Types:
             100	Custom list
@@ -977,14 +1195,22 @@ class SharePointConnector:
             112	User Information
             113	Web Part gallery
 
-        :param list_name: Name of new List.
-        :param data: Optional Parameter when you need to use your own data
-        :param description: Description of the list - Optional, by default set to blank.
-        :param base_template: Optional, determines the list type
-        :param allow_content_types: Optional
-        :param content_types_enabled: Optional
-        :return: Returns a REST response.
+        Args:
+            list_name (str): Name of new List.
+            data (dict): Raw sharepoint data.
+            description (str): Description of the list. Optional, by default "".
+            base_template (int): Optional, determines the list type. See Basic Types section for detail.
+            allow_content_types (bool): Optional, default True.
+            content_types_enabled (bool): Optional, default True.
+
+        Raises:
+            CantCreateNewListException
+
+        Returns:
+            SharepointList: Newly created list.
         """
+        logger.info("Create new list `%s`.", list_name)
+
         headers["POST"]["X-RequestDigest"] = self.digest()
         if data is None:
             data = {
@@ -1000,17 +1226,25 @@ class SharePointConnector:
             headers=headers["POST"],
             data=json.dumps(data)
         )
-        logger.info("Create new list - {}.".format(list_name))
+
         logger.debug("POST: {}".format(post.status_code))
         if post.status_code not in self.success_list:
             CantCreateNewListException(post.content)
 
+        return SharepointList.from_dict(self, post.json()["d"])
+
     def get_folder_by_relative_url(self, server_relative_url):
         """
-        Gets all information about given folder directory.
+        Gets all information about given folder directory by her relative url.
 
-        :param folder_name:  Required, name of the folder
-        :return: Returns REST response
+        Args:
+            server_relative_url (str): Path to the folder.
+
+        Raises:
+            ListingException
+
+        Returns:
+            obj: SharepointFolder
         """
         logger.info("Get information for %s folder.", server_relative_url)
 
@@ -1027,12 +1261,20 @@ class SharePointConnector:
 
     def custom_query(self, query_url, request_type="GET", data=None):
         """
-        Allows to provide your API end point query_url
+        Custom querying mechanism for raw queries.
 
-        :param query_url: Required, url for your API end point
-        :param request_type: Optional, default set to "GET" - type of your request
-        :param data: Optional, default set to None. Data for POST or PUT requests
-        :return: returns REST response status
+        Args:
+            query_url (str): Relative url without slash at the beginning for your API end point.
+            request_type (str): Optional, default set to "GET". Other types: "POST", "PUT", "DELETE".
+            data (dict): Optional, default set to None. Raw sharepoint data for your requests.
+                Required for "POST", "PUT" and "DELETE" requests.
+
+        Raises:
+            ValueError: In case that `data` parameter was not provided for given request or wrong
+                        `request_type` was used.
+        
+        Returns:
+            dict: REST response
         """
         if request_type == "GET":
 
