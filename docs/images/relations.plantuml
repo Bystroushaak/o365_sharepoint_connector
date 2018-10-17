@@ -1,0 +1,145 @@
+class sbase as "_SharepointElementBase" {
+    .connector
+    --
+    ._compose_url()
+    ._parse_exception()
+    ._send_get_request()
+    ._send_post_request()
+    ._send_delete_request()
+}
+
+class sfile as "SharepointFile" {
+    .name
+    .uuid
+    .exists
+    .content_tag
+    .linking_url
+    .time_created
+    .check_out_type
+    .check_in_comment
+    .time_last_modified
+    .server_relative_url
+    .folder_relative_url
+    --
+    .check_in()
+    .check_out()
+    .get_content()
+    .delete()
+    .update()
+}
+
+class sfolder as "SharepointFolder" {
+    .name
+    .exists
+    .unique_id
+    .item_count
+    .time_created
+    .time_last_modified
+    .server_relative_url
+    --
+    .get_files()
+    .upload_file()
+    .delete()
+}
+
+class sview as "SharepointView" {
+    .id
+    .title
+    .paged
+    .hidden
+    .list_id
+    .read_only
+    .server_relative_url
+    --
+    .add_field()
+    .change_field_index()
+    .remove_field()
+    .remove_all_fields()
+    .add_folder()
+    .get_folders()
+}
+
+class sattachment as "SharepointListItemAttachment" {
+    .id
+    .title
+    --
+    .update_attachment()
+}
+
+class slitem as "SharepointListItem" {
+    .id
+    .guid
+    .title
+    .created
+    .modified
+    .author_id
+    .editor_id
+    .content_type_id
+    .checkout_user_id
+    .file_system_object_type
+    .server_redirected_embed_uri
+    .server_redirected_embed_url
+    --
+    .delete()
+    .get_attachments()
+    .update_list_item()
+}
+
+class slist as "SharepointList" {
+    .id
+    .title
+    .hidden
+    .created
+    .description
+    .entity_type_name
+    .last_item_deleted_date
+    .last_item_modified_date
+    .last_item_user_modified_date
+    --
+    .add_field()
+    .update()
+    .delete()
+    .get_views()
+    .get_items()
+    .add_item()
+}
+
+class sconn as "SharePointConnector" {
+    .session
+    .success_list
+    .login_url
+    .base_url
+    .login
+    .password
+    --
+    ._compose_url()
+    .digest()
+    ._get_security_token()
+    .authenticate()
+    .get_lists()
+    .add_list()
+    .get_folder_by_relative_url()
+    .custom_query()
+}
+
+sconn --> slist: .get_lists()
+sconn --> slist: .add_list()
+sconn --> sfolder: .get_folder_by_relative_url()
+
+slist -l> sview: .get_views()
+slist --> slitem: .get_items()
+slist --> slitem: .add_item()
+
+slitem --> sattachment: .get_attachments()
+
+sview -l-> sfolder: .add_folder()
+sview -l-> sfolder: .get_folders()
+
+sfolder --> sfile: .get_files()
+
+sbase .u.> sview
+sbase .u.> slist
+sbase .u.> sfolder
+sbase ..> slitem
+sbase ..> sfile
+sbase ..> sattachment

@@ -56,6 +56,9 @@ class CantCreateNewListItemException(SharepointException):
 class CantCreateNewFieldException(SharepointException):
     pass
 
+class CantCreateNewFolderException(SharepointException):
+    pass
+
 
 class CantChangeFieldIndexException(SharepointException):
     pass
@@ -125,7 +128,7 @@ class _SharepointElementBase:
 
         return exception, keywords
 
-    def get(self, url, *url_params, **keywords):
+    def _send_get_request(self, url, *url_params, **keywords):
         """
         Send GET request.
 
@@ -154,7 +157,7 @@ class _SharepointElementBase:
 
         return result
 
-    def post(self, url, *url_params, **keywords):
+    def _send_post_request(self, url, *url_params, **keywords):
         """
         Send POST request.
 
@@ -183,7 +186,7 @@ class _SharepointElementBase:
 
         return result
 
-    def delete(self, url, *url_params, **keywords):
+    def _send_delete_request(self, url, *url_params, **keywords):
         """
         Send DELETE request.
 
@@ -204,7 +207,7 @@ class _SharepointElementBase:
 
         exception, keywords = self._parse_exception(keywords)
 
-        result = self._connector.session.session.delete(url, **keywords)
+        result = self._connector.session.delete(url, **keywords)
         logger.debug("DELETE: %s", result.status_code)
 
         if exception and result.status_code not in self._connector.success_list:
@@ -275,7 +278,7 @@ class SharepointFile(_SharepointElementBase):
         )
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
-        self.post(
+        self._send_post_request(
             "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckIn(comment='{}',checkintype={})",
             self.folder_relative_url,
             self.name,
@@ -295,7 +298,7 @@ class SharepointFile(_SharepointElementBase):
         logger.info("CheckOut file '%s' in library '%s'.", os.path.basename(self.name), self.folder_relative_url)
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
-        self.post(
+        self._send_post_request(
             "_api/web/GetFileByServerRelativeUrl('/{}/{}')/CheckOut()",
             self.folder_relative_url,
             self.name,
@@ -315,7 +318,7 @@ class SharepointFile(_SharepointElementBase):
         """
         logger.info("Get %s from %s.", self.name, self.server_relative_url)
 
-        get = self.get(
+        get = self._send_get_request(
             "_api/web/GetFolderByServerRelativeUrl('{}')/Files('{}')/$value",
             self.folder_relative_url,
             self.name,
@@ -335,7 +338,7 @@ class SharepointFile(_SharepointElementBase):
         logger.info("Delete file '%s' from library '%s'.", os.path.basename(self.name), self.folder_relative_url)
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        super().delete(
+        self._send_delete_request(
             "_api/web/GetFileByServerRelativeUrl('/{}/{}')",
             self.folder_relative_url,
             self.name,
@@ -362,7 +365,7 @@ class SharepointFile(_SharepointElementBase):
         with open(local_file_path, "rb") as f:
             file_as_bytes = bytearray(f.read())
 
-        self.post(
+        self._send_post_request(
             "_api/web/GetFolderByServerRelativeUrl('/{}')/Files/add(url='{}',overwrite=true)",
             self.folder_relative_url,
             self.name or os.path.basename(local_file_path),
@@ -420,7 +423,7 @@ class SharepointFolder(_SharepointElementBase):
         """
         logger.info("Get all files from %s.", self.server_relative_url)
 
-        get = self.get(
+        get = self._send_get_request(
             "_api/web/GetFolderByServerRelativeUrl('/{}')/Files",
             self.server_relative_url,
             headers=headers["GET"],
@@ -453,7 +456,7 @@ class SharepointFolder(_SharepointElementBase):
         with open(local_file_path, "rb") as f:
             file_as_bytes = bytearray(f.read())
 
-        post = self.post(
+        post = self._send_post_request(
             "_api/web/GetFolderByServerRelativeUrl('/{}')/Files/add(url='{}',overwrite=true)",
             self.server_relative_url,
             filename,
@@ -466,6 +469,23 @@ class SharepointFolder(_SharepointElementBase):
             self._connector,
             self.server_relative_url,
             post.json()["d"]
+        )
+
+    def delete(self):
+        """
+        Deletes this folder.
+
+        Raises:
+            DeleteException
+        """
+        logger.info("Delete folder %s.", self.server_relative_url)
+
+        headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
+        self._send_delete_request(
+            "_api/web/GetFolderByServerRelativeUrl('{}')",
+            self.server_relative_url,
+            headers=headers["DELETE"],
+            exception=DeleteException
         )
 
 
@@ -517,7 +537,7 @@ class SharepointView(_SharepointElementBase):
         logging.info("Add %s field to the view.", field_name)
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
-        self.post(
+        self._send_post_request(
             "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/addviewfield('{}')",
             self.list_id,
             self.id,
@@ -540,7 +560,7 @@ class SharepointView(_SharepointElementBase):
         logger.info("Moved %s field to the index %s.", field_name, field_index)
 
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
-        self.post(
+        self._send_post_request(
             "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/moveviewfieldto",
             self.list_id,
             self.id,
@@ -562,7 +582,7 @@ class SharepointView(_SharepointElementBase):
         logger.info("Remove %s field to the view.", field_name)
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        self.post(
+        self._send_post_request(
             "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeviewfield('{}')",
             self.list_id,
             self.id,
@@ -581,13 +601,41 @@ class SharepointView(_SharepointElementBase):
         logger.info("Remove all fields from the view.")
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        self.post(
+        self._send_post_request(
             "_api/web/lists(guid'{}')/views(guid'{}')/viewfields/removeallviewfields",
             self.list_id,
             self.id,
             headers=headers["DELETE"],
             exception=DeleteException
         )
+
+    def add_folder(self, name):
+        """
+        Create new folder in this view.
+
+        Raise:
+            CantCreateNewFolderException
+
+        Returns:
+            SharepointFolder: Newly created folder.
+        """
+        relative_url = self.server_relative_url.replace("/Forms/AllItems.aspx", "/")
+
+        data = {
+            '__metadata': {'type': 'SP.Folder'},
+            'ServerRelativeUrl': '{}{}'.format(relative_url, name)
+        }
+        logger.info("Create folder %s.", data)
+
+        headers["POST"]["X-RequestDigest"] = self._connector.digest()
+        get = self._send_post_request(
+            "_api/web/folders",
+            headers=headers["POST"],
+            data=json.dumps(data),
+            exception=CantCreateNewFolderException
+        )
+
+        return SharepointFolder.from_dict(self._connector, get.json()["d"])
 
     def get_folders(self):
         """
@@ -602,7 +650,7 @@ class SharepointView(_SharepointElementBase):
         relative_url = self.server_relative_url.replace("/Forms/AllItems.aspx", "/")
         logger.info("Get list of folders for %s.", relative_url)
 
-        get = self.get(
+        get = self._send_get_request(
             "_api/web/GetFolderByServerRelativeUrl('{}')/Folders",
             relative_url,
             headers=headers["GET"],
@@ -662,7 +710,7 @@ class SharepointListItemAttachment(_SharepointElementBase):
         with open(local_file_path, "rb") as f:
             file_to_bites = bytearray(f.read())
 
-        self.post(
+        self._send_post_request(
             "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles('{}')/$value",
             self.title,
             self.id,
@@ -730,7 +778,7 @@ class SharepointListItem(_SharepointElementBase):
         logger.info("Delete list item of id %s in %s.", self.id, self.list_title)
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        super().delete(
+        self._send_delete_request(
             "_api/web/lists/GetByTitle('{}')/items('{}')",
             self.list_title,
             self.id,
@@ -750,7 +798,7 @@ class SharepointListItem(_SharepointElementBase):
         """
         logger.info("Get attachments for item ID: %s from %s list.", self.list_title, self.id)
 
-        get = self.get(
+        get = self._send_get_request(
             "_api/web/lists/GetByTitle('{}')/items({})/AttachmentFiles/",
             self.list_title,
             self.id,
@@ -779,7 +827,7 @@ class SharepointListItem(_SharepointElementBase):
         logger.info("Update list item of id %s in %s.", self.id, self.list_title)
 
         headers["PUT"]['X-RequestDigest'] = self._connector.digest()
-        put = self.post(
+        put = self._send_post_request(
             "+api/web/lists/GetByTitle('{}')/items('{}')",
             self.list_title,
             self.id,
@@ -793,18 +841,19 @@ class SharepointListItem(_SharepointElementBase):
 
 class SharepointList(_SharepointElementBase):
     def __init__(self):
+        self.raw_data = ""
+        self._connector = None
+
         self.id = ""
         self.title = ""
         self.hidden = False
         self.created = None
-        self.raw_data = ""
         self.description = ""
         self.entity_type_name = ""
         self.last_item_deleted_date = ""
         self.last_item_modified_date = ""
         self.last_item_user_modified_date = ""
 
-        self._connector = None
 
     @classmethod
     def from_dict(cls, connector, data):
@@ -901,7 +950,7 @@ class SharepointList(_SharepointElementBase):
             'FieldTypeKind': field_type
         }
         headers["POST"]["X-RequestDigest"] = self._connector.digest()
-        self.post(
+        self._send_post_request(
             "_api/web/lists/GetByTitle('{}')/fields",
             self.title,
             headers=headers["POST"],
@@ -909,7 +958,7 @@ class SharepointList(_SharepointElementBase):
             exception=CantCreateNewFieldException
         )
 
-    def update_list(self, data):
+    def update(self, data):
         """
         Update this list with raw sharepoint data.
 
@@ -922,7 +971,7 @@ class SharepointList(_SharepointElementBase):
         logger.info("Update list name for list of GUID: %s", self.id)
 
         headers["PUT"]["X-RequestDigest"] = self._connector.digest()
-        self.post(
+        self._send_post_request(
             "_api/web/lists(guid'{}')",
             self.id,
             headers=headers["PUT"],
@@ -930,7 +979,7 @@ class SharepointList(_SharepointElementBase):
             exception=UpdateException
         )
 
-    def delete_list(self):
+    def delete(self):
         """
         Delete this list.
 
@@ -940,7 +989,7 @@ class SharepointList(_SharepointElementBase):
         logger.info("Delete list of GUID: %s", self.id)
 
         headers["DELETE"]["X-RequestDigest"] = self._connector.digest()
-        self.delete(
+        self._send_delete_request(
             "_api/web/lists(guid'{}')",
             self.id,
             headers=headers["DELETE"],
@@ -959,7 +1008,7 @@ class SharepointList(_SharepointElementBase):
         """
         logging.info("Get all list views for %s." % self.id)
 
-        get = self.get(
+        get = self._send_get_request(
             "_api/web/lists(guid'{}')/views",
             self.id,
             headers=headers["GET"],
@@ -983,7 +1032,7 @@ class SharepointList(_SharepointElementBase):
         """
         logging.info("Get list items from %s.", self.title)
 
-        get = self.get(
+        get = self._send_get_request(
             "_api/web/lists/GetByTitle('{}')/items?$top=5000",
             self.title,
             headers=headers["GET"],
@@ -1012,7 +1061,7 @@ class SharepointList(_SharepointElementBase):
             'Title': title,
             '__metadata': {'type': 'SP.Data.{}ListItem'.format(self.title)},
         }
-        post = self.post(
+        post = self._send_post_request(
             "_api/web/lists/GetByTitle('{}')/items",
             self.title,
             data=json.dumps(data),
@@ -1173,8 +1222,8 @@ class SharePointConnector:
             for x in get.json()["d"]["results"]
         }
 
-    def create_new_list(self, list_name, data=None, description="", allow_content_types=True,
-                        base_template=100, content_types_enabled=True):
+    def add_list(self, list_name, data=None, description="", allow_content_types=True,
+                 base_template=100, content_types_enabled=True):
         """
         Used to create new SharePoint List. By default creates new List of any
         Type named `list_name`.
@@ -1229,7 +1278,7 @@ class SharePointConnector:
 
         logger.debug("POST: {}".format(post.status_code))
         if post.status_code not in self.success_list:
-            CantCreateNewListException(post.content)
+            raise CantCreateNewListException(post.content)
 
         return SharepointList.from_dict(self, post.json()["d"])
 
@@ -1272,7 +1321,7 @@ class SharePointConnector:
         Raises:
             ValueError: In case that `data` parameter was not provided for given request or wrong
                         `request_type` was used.
-        
+
         Returns:
             dict: REST response
         """
