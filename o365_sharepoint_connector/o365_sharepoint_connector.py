@@ -409,7 +409,7 @@ class SharepointFolder(_SharepointElementBase):
         return sdir
 
     def __repr__(self):
-        return "SharepointDir(%s)" % self.name
+        return "SharepointDir(%s)" % self.server_relative_url
 
     def get_files(self):
         """
@@ -1019,6 +1019,29 @@ class SharepointList(_SharepointElementBase):
             x["Title"]: SharepointView.from_dict(self._connector, self.id, x)
             for x in get.json()["d"]["results"]
         }
+
+    def get_all_folders(self):
+        """
+        Return list of folders in all views.
+
+        Returns:
+            list: List of all folders.
+        """
+
+        visible_views = [
+            x for x in self.get_views().values()
+            if not x.hidden
+        ]
+
+        if not visible_views:
+            return []
+
+        all_folders = {}
+        for view in visible_views:
+            for folder in view.get_folders().values():
+                all_folders[folder.server_relative_url] = folder
+
+        return list(all_folders.values())
 
     def get_items(self):
         """

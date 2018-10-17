@@ -102,6 +102,7 @@ class slist as "SharepointList" {
     .get_views()
     .get_items()
     .add_item()
+    .get_all_folders()
 }
 
 class sconn as "SharePointConnector" {
@@ -130,12 +131,15 @@ slist -l> sview: .get_views()
 slist --> slitem: .get_items()
 slist --> slitem: .add_item()
 
+slist -l-> sfolder: .get_all_folders()
+
 slitem --> sattachment: .get_attachments()
 
 sview -l-> sfolder: .add_folder()
 sview -l-> sfolder: .get_folders()
 
 sfolder --> sfile: .get_files()
+sfolder --> sfile: .upload_file()
 
 sbase .u.> sview
 sbase .u.> slist
