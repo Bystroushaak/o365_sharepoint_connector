@@ -1,6 +1,16 @@
 Changelog
 ^^^^^^^^^
 
+20181202
+````````
+    - Added new methods:
+        - add_subfolder
+        - _check_whether_the_base_url_is_not_already_list
+        - get_list_by_title
+    - Codes for templates moved from docstring tu class BaseTemplates.
+    - Fixed a lot of bugs.
+    - Added better exception messages.
+
 20181013
 ````````
     - Py3 specified in the description.

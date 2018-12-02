@@ -488,6 +488,35 @@ class SharepointFolder(_SharepointElementBase):
             exception=DeleteException
         )
 
+    def add_subfolder(self, name):
+        """
+        Create new subfolder under this folder.
+
+        Raise:
+            CantCreateNewFolderException
+
+        Returns:
+            SharepointFolder: Newly created folder.
+        """
+        relative_url = self.server_relative_url.replace("/Forms/AllItems.aspx", "/")
+        relative_url = relative_url + "/" if not relative_url.endswith("/") else relative_url
+
+        data = {
+            '__metadata': {'type': 'SP.Folder'},
+            'ServerRelativeUrl': '{}{}'.format(relative_url, name)
+        }
+        logger.info("Create folder %s.", data)
+
+        headers["POST"]["X-RequestDigest"] = self._connector.digest()
+        get = self._send_post_request(
+            "_api/web/folders",
+            headers=headers["POST"],
+            data=json.dumps(data),
+            exception=CantCreateNewFolderException
+        )
+
+        return SharepointFolder.from_dict(self._connector, get.json()["d"])
+
 
 class SharepointView(_SharepointElementBase):
     """
@@ -1102,8 +1131,40 @@ class SharePointConnector:
     Use also to authenticate access to the SharepointSite and to get a digest
     value for POST requests.
     """
-    def __init__(self, login, password, site_url, login_url=None):
+    class BaseTemplates:
+        CustomList = 100
+        DocumentLibrary = 101
+        Survey = 102
+        Links = 103
+        Announcements = 104
+        Contacts = 105
+        Calendar = 106
+        Tasks = 107
+        DiscussionBoard = 108
+        PictureLibrary = 109
+        DataSourcesForASite = 110
+        SiteTemplateGallery = 111
+        UserInformation = 112
+        WebPartGallery = 113
+
+    def __init__(self, login, password, site_url, login_url=None, proxy=None):
+        """
+        Constructor.
+
+        Args:
+            login (str): Email.
+            password (str): Password.
+            site_url (str): URL of your sharepoint _site_.
+            login_url (str, optional): Defaults to None. Login URL. May differ
+                from site_url in some cases.
+            proxy (dict, optional): Defaults to None. Requests proxy dict.
+                {"http": "http://192.168.1.100:8080"} for example.
+        """
+        self.proxy = proxy
         self.session = requests.Session()
+        if proxy:
+            self.session.proxies.update(proxy)
+
         self.success_list = [200, 201, 202]
 
         if not login_url:
@@ -1200,9 +1261,29 @@ class SharePointConnector:
         )
 
         if token is None:
-            raise Exception('Check username/password and rootsite')
+            raise LoginException('Check username/password and rootsite')
 
         return token.text
+
+    def _check_whether_the_base_url_is_not_already_list(self):
+        try:
+            self.get_lists()
+        except ListingException:
+            old_base_url = self.base_url
+
+            to = -1 if not self.base_url.endswith("/") else -2
+            tokens = self.base_url.split("/")
+            self.base_url = "/".join(tokens[:to])
+
+            if not self.base_url.endswith("/"):
+                self.base_url += "/"
+
+            try:
+                self.get_lists()
+                logger.warning("%s is list URL, using instead base URL %s",
+                               old_base_url, self.base_url)
+            except ListingException:
+                self.base_url = old_base_url
 
     def authenticate(self):
         """
@@ -1211,16 +1292,22 @@ class SharePointConnector:
         Raises:
             LoginException in case that user wasn't logged in.
         """
+        self.session = requests.Session()
+        if self.proxy:
+            self.session.proxies.update(self.proxy)
+
         token = self._get_security_token(self.login, self.password)
         url = self.login_url + '_forms/default.aspx?wa=wsignin1.0'
         response = self.session.post(url, data=token)
 
         if response.status_code not in self.success_list:
-            raise LoginException(response.text)
+            raise LoginException("Reponse code: %s text: %s" % (response.status_code, response.text))
 
         response = self.session.get(self.base_url, headers=headers["GET"])
         if response.status_code not in self.success_list:
-            raise LoginException(response.text)
+            raise LoginException("Reponse code: %s text: %s" % (response.status_code, response.text))
+
+        self._check_whether_the_base_url_is_not_already_list()
 
     def get_lists(self):
         """
@@ -1245,33 +1332,43 @@ class SharePointConnector:
             for x in get.json()["d"]["results"]
         }
 
+    def get_list_by_title(self, title):
+        """
+        Get sharepoint list by its title.
+
+        Args:
+            title (str): Name of the list.
+
+        Raises:
+            ListingException: If the list can't be resolved.
+
+        Returns:
+            SharepointList: Instance of list.
+        """
+        logging.info("Called get_list_by_title(%s)", title)
+
+        get = self.session.get(
+            self._compose_url("_api/web/lists/GetByTitle('%s')" % title),
+            headers=headers["GET"]
+        )
+
+        logging.debug("GET: %s", get.status_code)
+        if get.status_code not in self.success_list:
+            raise ListingException(get.content)
+
+        return SharepointList.from_dict(self, get.json()["d"])
+
     def add_list(self, list_name, data=None, description="", allow_content_types=True,
                  base_template=100, content_types_enabled=True):
         """
         Used to create new SharePoint List. By default creates new List of any
         Type named `list_name`.
 
-        Basic Types:
-            100	Custom list
-            101	Document library
-            102	Survey
-            103	Links
-            104	Announcements
-            105	Contacts
-            106	Calendar
-            107	Tasks
-            108	Discussion board
-            109	Picture library
-            110	Data sources for a site
-            111	Site template gallery
-            112	User Information
-            113	Web Part gallery
-
         Args:
             list_name (str): Name of new List.
             data (dict): Raw sharepoint data.
             description (str): Description of the list. Optional, by default "".
-            base_template (int): Optional, determines the list type. See Basic Types section for detail.
+            base_template (int): Optional, determines the list type. See BaseTemplates for details.
             allow_content_types (bool): Optional, default True.
             content_types_enabled (bool): Optional, default True.
 

@@ -36,6 +36,14 @@ class TestSharePointConnector(unittest.TestCase):
         lists = self.c.get_lists()
         self.assertNotIn("unittests", lists)
 
+    def test_get_all_folders(self):
+        try:
+            ut_list = self.c.add_list("unittests")
+        except CantCreateNewListException:
+            ut_list = self.c.get_lists()["unittests"]
+
+        assert ut_list.get_all_folders()
+
 
 if __name__ == '__main__':
     unittest.main()

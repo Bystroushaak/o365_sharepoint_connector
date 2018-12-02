@@ -2,7 +2,7 @@ from distutils.core import setup
 
 setup(
     name='o365_sharepoint_connector',
-    version='20181013',
+    version='20181202',
     packages=['o365_sharepoint_connector'],
     url='https://github.com/Bystroushaak/Office365SharepointConnector',
     license='MIT',
